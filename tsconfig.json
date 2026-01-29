@@ -1,0 +1,31 @@
+{
+	"compilerOptions": {
+		"resolveJsonModule": true,
+		"target": "ES2020",
+		"module": "ESNext",
+		"moduleResolution": "bundler",
+		"jsx": "react-jsx",
+		"strict": false,
+		"esModuleInterop": true,
+		"experimentalDecorators": true,
+		"emitDecoratorMetadata": true,
+		"sourceMap": false,
+		"emitDeclarationOnly": false,
+		"declaration": true,
+		"allowSyntheticDefaultImports": true,
+		"resolvePackageJsonExports": true,
+		"forceConsistentCasingInFileNames": true,
+		"skipLibCheck": true,
+		"baseUrl": "./src",
+		"outDir": "./dist",
+		"rootDir": ".",
+		"noEmit": false,
+		"typeRoots": ["./node_modules/@types", "./types"],
+		"lib": ["ESNext", "DOM", "DOM.Iterable"],
+		"paths": {
+			"@injection/*": ["./gl/injection/*"]
+		}
+	},
+	"include": ["src/**/*"],
+	"exclude": ["node_modules", "dist", "src/scripts"]
+}

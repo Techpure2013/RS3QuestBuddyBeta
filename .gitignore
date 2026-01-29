@@ -1,0 +1,36 @@
+# env
+.env
+.env.*.local
+!.env.example
+
+# drizzle cache/artifacts
+.drizzle
+drizzle/
+scripts/
+drizzle.config.ts
+
+
+# local db data if you bind-mount
+data/
+pg_data/
+postgres-data/
+
+# dumps/backups
+*.sql
+*.dump
+*.bak
+*.tar
+#VSCode Stuff
+.idea
+.vs
+.VSCode
+.github
+.prettierrc
+# Node stuff
+node_modules/
+appconfig.local.json
+dist/.claude/
+.claude/
+dist/
+BROADCAST_TOAST_GUIDE.md
+TEST_INSTRUCTIONS.md
