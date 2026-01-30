@@ -87,6 +87,50 @@ async function detectViewportFromRenders(): Promise<{ width: number; height: num
 }
 
 /**
+ * Detect DPI scaling by finding the Lanczos scaler
+ * Returns actual UI dimensions if scaler is found, null otherwise
+ */
+async function detectDPIScaling(): Promise<{
+  screenWidth: number;
+  screenHeight: number;
+  uiWidth: number;
+  uiHeight: number;
+} | null> {
+  if (!state.patchrs?.native) return null;
+
+  try {
+    const { getProgramMeta } = await import("@injection/render/renderprogram");
+
+    const renders = await state.patchrs.native.recordRenderCalls({
+      maxframes: 1,
+      features: ["texturesnapshot"],
+      framebufferId: 0,
+    });
+
+    const viewport = renders.find(r => r.viewport)?.viewport;
+    const screenWidth = viewport?.width || state.patchrs.native.getRsWidth() || 1920;
+    const screenHeight = viewport?.height || state.patchrs.native.getRsHeight() || 1080;
+
+    // Find the Lanczos scaler
+    for (const render of renders) {
+      const prog = getProgramMeta(render.program);
+      if (prog.isUiScaler) {
+        const samplers = render.samplers || (render as any).textures || {};
+        const sampler = Object.values(samplers)[0] as { width: number; height: number } | undefined;
+        if (sampler && (sampler.width !== screenWidth || sampler.height !== screenHeight)) {
+          console.log(`[UIScaleManager] DPI scaling detected: UI ${sampler.width}x${sampler.height} -> Screen ${screenWidth}x${screenHeight}`);
+          return { screenWidth, screenHeight, uiWidth: sampler.width, uiHeight: sampler.height };
+        }
+      }
+    }
+    return null;
+  } catch (e) {
+    console.warn("[UIScaleManager] DPI detection failed:", e);
+    return null;
+  }
+}
+
+/**
  * Initialize the UI scale manager
  * Starts monitoring for UI scale changes
  */
@@ -128,13 +172,28 @@ export async function initUIScaleManager(): Promise<boolean> {
       state.scaleInfo.scaleY = state.lastScreenHeight / uiHeight;
       console.log(`[UIScaleManager] 4K mode: UI ${uiWidth}x${uiHeight} -> Screen ${state.lastScreenWidth}x${state.lastScreenHeight}`);
     } else {
-      // Non-4K: no scaling
-      state.scaleInfo.isScaled = false;
-      state.scaleInfo.uiWidth = state.lastScreenWidth;
-      state.scaleInfo.uiHeight = state.lastScreenHeight;
-      state.scaleInfo.scaleX = 1;
-      state.scaleInfo.scaleY = 1;
-      console.log(`[UIScaleManager] Native resolution: ${state.lastScreenWidth}x${state.lastScreenHeight}`);
+      // Non-4K: check for DPI scaling (e.g., 125%)
+      const dpiInfo = await detectDPIScaling();
+      if (dpiInfo) {
+        state.scaleInfo.isScaled = true;
+        state.scaleInfo.screenWidth = dpiInfo.screenWidth;
+        state.scaleInfo.screenHeight = dpiInfo.screenHeight;
+        state.scaleInfo.uiWidth = dpiInfo.uiWidth;
+        state.scaleInfo.uiHeight = dpiInfo.uiHeight;
+        state.scaleInfo.scaleX = dpiInfo.screenWidth / dpiInfo.uiWidth;
+        state.scaleInfo.scaleY = dpiInfo.screenHeight / dpiInfo.uiHeight;
+        state.lastScreenWidth = dpiInfo.screenWidth;
+        state.lastScreenHeight = dpiInfo.screenHeight;
+        console.log(`[UIScaleManager] DPI mode: UI ${dpiInfo.uiWidth}x${dpiInfo.uiHeight} -> Screen ${dpiInfo.screenWidth}x${dpiInfo.screenHeight}`);
+      } else {
+        // No scaling detected
+        state.scaleInfo.isScaled = false;
+        state.scaleInfo.uiWidth = state.lastScreenWidth;
+        state.scaleInfo.uiHeight = state.lastScreenHeight;
+        state.scaleInfo.scaleX = 1;
+        state.scaleInfo.scaleY = 1;
+        console.log(`[UIScaleManager] Native resolution: ${state.lastScreenWidth}x${state.lastScreenHeight}`);
+      }
     }
 
     // Notify listeners of initial state
@@ -190,12 +249,25 @@ function startScaleMonitoring(): void {
             state.scaleInfo.scaleY = currentHeight / uiHeight;
             console.log(`[UIScaleManager] 4K mode: UI ${uiWidth}x${uiHeight} -> Screen ${currentWidth}x${currentHeight}`);
           } else {
-            state.scaleInfo.isScaled = false;
-            state.scaleInfo.uiWidth = currentWidth;
-            state.scaleInfo.uiHeight = currentHeight;
-            state.scaleInfo.scaleX = 1;
-            state.scaleInfo.scaleY = 1;
-            console.log(`[UIScaleManager] Native resolution: ${currentWidth}x${currentHeight}`);
+            // Non-4K: check for DPI scaling
+            const dpiInfo = await detectDPIScaling();
+            if (dpiInfo) {
+              state.scaleInfo.isScaled = true;
+              state.scaleInfo.screenWidth = dpiInfo.screenWidth;
+              state.scaleInfo.screenHeight = dpiInfo.screenHeight;
+              state.scaleInfo.uiWidth = dpiInfo.uiWidth;
+              state.scaleInfo.uiHeight = dpiInfo.uiHeight;
+              state.scaleInfo.scaleX = dpiInfo.screenWidth / dpiInfo.uiWidth;
+              state.scaleInfo.scaleY = dpiInfo.screenHeight / dpiInfo.uiHeight;
+              console.log(`[UIScaleManager] DPI mode: UI ${dpiInfo.uiWidth}x${dpiInfo.uiHeight} -> Screen ${dpiInfo.screenWidth}x${dpiInfo.screenHeight}`);
+            } else {
+              state.scaleInfo.isScaled = false;
+              state.scaleInfo.uiWidth = currentWidth;
+              state.scaleInfo.uiHeight = currentHeight;
+              state.scaleInfo.scaleX = 1;
+              state.scaleInfo.scaleY = 1;
+              console.log(`[UIScaleManager] Native resolution: ${currentWidth}x${currentHeight}`);
+            }
           }
 
           notifyResolutionChange();

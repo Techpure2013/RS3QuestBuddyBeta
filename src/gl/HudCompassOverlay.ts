@@ -13,8 +13,8 @@ import * as patchrs from "./injection/util/patchrs_napi";
 import { GL_FLOAT, UniformSnapshotBuilder } from "./injection/overlays/index";
 import { onResolutionChange, getUIScaleInfo, UIScaleInfo } from "./UIScaleManager";
 import { startPlayerTracking, stopPlayerTracking, getPlayerPosition, onTeleportStateChange, offTeleportStateChange } from "./PlayerPositionTracker";
-import { getProgramMeta } from "./injection/render/renderprogram";
 import { hudCompassVertShader, hudCompassFragShader } from "./shaders";
+import { getProgramMeta } from "./injection/render/renderprogram";
 
 // Storage key prefix for overlay position (per-resolution)
 const POSITION_STORAGE_KEY_PREFIX = "hudCompassOverlay:position:";
@@ -39,6 +39,7 @@ export class HudCompassOverlay {
     uPosition: "vec2";
     uSize: "vec2";
     uFlipY: "float";
+    uFlipUV: "float";
     uTime: "float";
     uBladeGlow1: "vec4";
     uBladeGlow2: "vec4";
@@ -73,12 +74,12 @@ export class HudCompassOverlay {
   // Resolution change subscription
   private unsubscribeResolution: (() => void) | null = null;
 
-  // Cached UI framebuffer info for 4K rendering
-  private uiFramebufferInfo: { framebufferId: number; width: number; height: number } | null = null;
-
   // Teleport suppression
   private teleportCallbackId: string | null = null;
   private hiddenForTeleport = false;
+
+  // Cached UI framebuffer info for 4K/DPI rendering
+  private uiFramebufferInfo: { framebufferId: number; width: number; height: number } | null = null;
 
   constructor() {
     // Load saved position or use default (bottom-right area)
@@ -110,6 +111,7 @@ export class HudCompassOverlay {
         uPosition: "vec2",
         uSize: "vec2",
         uFlipY: "float",
+        uFlipUV: "float",
         uTime: "float",
         uBladeGlow1: "vec4",  // N, NE, E, SE
         uBladeGlow2: "vec4",  // S, SW, W, NW
@@ -122,6 +124,7 @@ export class HudCompassOverlay {
       this.uniformBuilder.mappings.uPosition.write([this.position.x, this.position.y]);
       this.uniformBuilder.mappings.uSize.write([this.size.width, this.size.height]);
       this.uniformBuilder.mappings.uFlipY.write([1.0]);  // Default to frameend mode
+      this.uniformBuilder.mappings.uFlipUV.write([0.0]); // Default: no UV flip (1080p mode)
       this.uniformBuilder.mappings.uTime.write([0.0]);
       this.uniformBuilder.mappings.uBladeGlow1.write([0, 0, 0, 0]);
       this.uniformBuilder.mappings.uBladeGlow2.write([0, 0, 0, 0]);
@@ -233,7 +236,7 @@ export class HudCompassOverlay {
     const oldWidth = this.uiSize?.width ?? 0;
     const oldHeight = this.uiSize?.height ?? 0;
 
-    // Invalidate cached framebuffer info
+    // Invalidate cached UI framebuffer info on resolution change
     this.uiFramebufferInfo = null;
 
     if (newWidth !== oldWidth || newHeight !== oldHeight) {
@@ -538,11 +541,12 @@ export class HudCompassOverlay {
       // uPosition: vec2 = 8 bytes (offset 8)
       // uSize: vec2 = 8 bytes (offset 16)
       // uFlipY: float = 4 bytes (offset 24)
-      // uTime: float = 4 bytes (offset 28)
-      // uBladeGlow1: vec4 = 16 bytes (offset 32)
-      // uBladeGlow2: vec4 = 16 bytes (offset 48)
-      const glowOffset1 = 32;
-      const glowOffset2 = 48;
+      // uFlipUV: float = 4 bytes (offset 28)
+      // uTime: float = 4 bytes (offset 32)
+      // uBladeGlow1: vec4 = 16 bytes (offset 36)
+      // uBladeGlow2: vec4 = 16 bytes (offset 52)
+      const glowOffset1 = 36;
+      const glowOffset2 = 52;
 
       // Write uBladeGlow1 (N, NE, E, SE)
       view.setFloat32(glowOffset1, this.bladeGlow[0], true);
@@ -617,14 +621,13 @@ export class HudCompassOverlay {
       const uniformState = this.overlayHandle.getUniformState();
       const view = new DataView(uniformState.buffer, uniformState.byteOffset, uniformState.byteLength);
 
-      // uTime is at offset 20 (after uScreenSize:8 + uPosition:8 + uSize:8 + uFlipY:4 = 28)
-      // Wait, let's calculate properly:
       // uScreenSize: vec2 = 8 bytes (offset 0)
       // uPosition: vec2 = 8 bytes (offset 8)
       // uSize: vec2 = 8 bytes (offset 16)
       // uFlipY: float = 4 bytes (offset 24)
-      // uTime: float = 4 bytes (offset 28)
-      view.setFloat32(28, this.animationTime, true);
+      // uFlipUV: float = 4 bytes (offset 28)
+      // uTime: float = 4 bytes (offset 32)
+      view.setFloat32(32, this.animationTime, true);
 
       this.overlayHandle.setUniformState(uniformState);
     } catch (e) {
@@ -642,9 +645,9 @@ export class HudCompassOverlay {
       this.animationFrame = null;
     }
   }
-
   /**
-   * Find UI framebuffer for 4K rendering
+   * Find the UI framebuffer for 4K/DPI rendering
+   * At 4K or with DPI scaling, the UI renders to a separate framebuffer which is then scaled
    */
   private async findUIFramebuffer(): Promise<{ framebufferId: number; width: number; height: number } | null> {
     if (this.uiFramebufferInfo) {
@@ -654,28 +657,33 @@ export class HudCompassOverlay {
     if (!patchrs.native) return null;
 
     try {
-      // Record from screen to find Lanczos scaler
+      // Record from screen (fb 0) to find the Lanczos scaler
       const screenRenders = await patchrs.native.recordRenderCalls({
         maxframes: 1,
         features: ["texturesnapshot"],
         framebufferId: 0,
       });
 
+      console.log(`[HudCompass] findUIFramebuffer: Got ${screenRenders.length} renders from fb 0`);
+
+      // Find the Lanczos scaler and get its source texture
       let scalingTextureId = 0;
       for (const render of screenRenders) {
         if (!render.program) continue;
         const meta = getProgramMeta(render.program);
         if (meta.isUiScaler) {
-          const textureData = render.samplers || render.textures || {};
+          const textureData = render.samplers || (render as any).textures || {};
           const sampler = Object.values(textureData)[0] as patchrs.TextureSnapshot | patchrs.TrackedTexture | undefined;
           if (sampler) {
             scalingTextureId = sampler.texid;
+            console.log(`[HudCompass] Found Lanczos scaler reading from texture ${scalingTextureId}`);
             break;
           }
         }
       }
 
       if (scalingTextureId > 0) {
+        // Record from the UI framebuffer (the one with the scaling texture)
         const uiRenders = await patchrs.native.recordRenderCalls({
           maxframes: 1,
           features: [],
@@ -689,10 +697,12 @@ export class HudCompassOverlay {
             width: uiRender.viewport.width,
             height: uiRender.viewport.height,
           };
+          console.log(`[HudCompass] Found UI framebuffer: fb=${this.uiFramebufferInfo.framebufferId}, size=${this.uiFramebufferInfo.width}x${this.uiFramebufferInfo.height}`);
           return this.uiFramebufferInfo;
         }
       }
 
+      console.log("[HudCompass] UI framebuffer not found");
       return null;
     } catch (e) {
       console.warn("[HudCompass] Error finding UI framebuffer:", e);
@@ -716,41 +726,49 @@ export class HudCompassOverlay {
     const scaleInfo = getUIScaleInfo();
     const isScaled = scaleInfo.isScaled;
 
+    console.log(`[HudCompass] recreateOverlay: isScaled=${isScaled}, screen=${scaleInfo.screenWidth}x${scaleInfo.screenHeight}, ui=${scaleInfo.uiWidth}x${scaleInfo.uiHeight}`);
+
     try {
       if (isScaled) {
-        // 4K mode: render to UI framebuffer
+        // Scaled mode (4K or DPI): Use UI framebuffer approach like QuestStepOverlay
         const uiFb = await this.findUIFramebuffer();
 
         if (uiFb) {
-          // Convert screen Y to OpenGL Y (flip)
+          // Render in UI framebuffer coordinates (same approach as QuestStepOverlay)
+          // Y position is flipped for OpenGL coordinate system
           const glPositionY = uiFb.height - this.position.y - this.size.height;
+
+          console.log(`[HudCompass] UI framebuffer mode: fb=${uiFb.framebufferId}, size=${uiFb.width}x${uiFb.height}, pos=(${this.position.x}, ${glPositionY.toFixed(1)})`);
 
           this.uniformBuilder.mappings.uScreenSize.write([uiFb.width, uiFb.height]);
           this.uniformBuilder.mappings.uPosition.write([this.position.x, glPositionY]);
           this.uniformBuilder.mappings.uSize.write([this.size.width, this.size.height]);
-          this.uniformBuilder.mappings.uFlipY.write([1.0]); 
+          this.uniformBuilder.mappings.uFlipY.write([0.0]);  // No NDC flip - we flipped Y position manually
+          this.uniformBuilder.mappings.uFlipUV.write([1.0]); // Flip UV to correct compass orientation
 
           this.overlayHandle = patchrs.native!.beginOverlay(
-            {  },
+            {},
             this.program,
             this.vertexArray,
             {
-              uniformBuffer: this.uniformBuilder.buffer,
+              uniformBuffer: new Uint8Array(this.uniformBuilder.buffer.buffer.slice(0)),
               renderMode: "triangles",
-              trigger: "frameend",  // 4K uses "after" to render after UI framebuffer draws
+              trigger: "frameend",
               uniformSources: [],
               alphaBlend: true,
             }
           );
         } else {
-          // Fallback: scale to screen coords
+          // Fallback: scale UI coords to screen coords
           const scaleX = scaleInfo.screenWidth / scaleInfo.uiWidth;
           const scaleY = scaleInfo.screenHeight / scaleInfo.uiHeight;
+          console.log(`[HudCompass] Scaled fallback: scale ${scaleX.toFixed(3)}x${scaleY.toFixed(3)}, UI (${this.position.x}, ${this.position.y}) -> Screen (${(this.position.x * scaleX).toFixed(1)}, ${(this.position.y * scaleY).toFixed(1)})`);
 
           this.uniformBuilder.mappings.uScreenSize.write([scaleInfo.screenWidth, scaleInfo.screenHeight]);
           this.uniformBuilder.mappings.uPosition.write([this.position.x * scaleX, this.position.y * scaleY]);
           this.uniformBuilder.mappings.uSize.write([this.size.width * scaleX, this.size.height * scaleY]);
           this.uniformBuilder.mappings.uFlipY.write([1.0]);
+          this.uniformBuilder.mappings.uFlipUV.write([0.0]); // No UV flip for screen coords mode
 
           this.overlayHandle = patchrs.native!.beginOverlay(
             {},
@@ -767,10 +785,12 @@ export class HudCompassOverlay {
         }
       } else {
         // 1080p mode: direct screen rendering
+        console.log(`[HudCompass] 1080p mode: screen ${scaleInfo.screenWidth}x${scaleInfo.screenHeight}, pos (${this.position.x}, ${this.position.y})`);
         this.uniformBuilder.mappings.uScreenSize.write([scaleInfo.screenWidth, scaleInfo.screenHeight]);
         this.uniformBuilder.mappings.uPosition.write([this.position.x, this.position.y]);
         this.uniformBuilder.mappings.uSize.write([this.size.width, this.size.height]);
         this.uniformBuilder.mappings.uFlipY.write([1.0]);
+        this.uniformBuilder.mappings.uFlipUV.write([0.0]); // No UV flip for 1080p mode
 
         this.overlayHandle = patchrs.native!.beginOverlay(
           {},

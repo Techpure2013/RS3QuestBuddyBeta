@@ -7,6 +7,7 @@ uniform vec2 uScreenSize;
 uniform vec2 uPosition;
 uniform vec2 uSize;
 uniform float uFlipY;
+uniform float uFlipUV;  // 1.0 = flip UV.y for correct compass orientation
 
 out vec2 vUV;
 
@@ -22,5 +23,6 @@ void main() {
         ndc.y = -ndc.y;
     }
     gl_Position = vec4(ndc, 0.0, 1.0);
-    vUV = aUV;
+    // Pass UV, optionally flip V for correct compass orientation in different render modes
+    vUV = vec2(aUV.x, uFlipUV > 0.5 ? 1.0 - aUV.y : aUV.y);
 }
