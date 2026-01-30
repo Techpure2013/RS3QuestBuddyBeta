@@ -771,14 +771,14 @@ export class QuestStepOverlay {
           console.log(`[QuestStepOverlay] 4K UI fb: screenY=${this.position.y} -> glY=${glPositionY.toFixed(1)} (fbHeight=${uiFb.height})`);
 
           this.overlayHandle = patchrs.native.beginOverlay(
-            { framebufferId: uiFb.framebufferId },
+            { },
             this.program,
             this.vertexArray,
             {
               uniformBuffer: uniforms.buffer,
               samplers: { "0": this.texture },
               renderMode: "triangles",
-              trigger: "after",  // 4K uses "after" to render after UI framebuffer draws
+              trigger: "frameend",  
               uniformSources: [],
               alphaBlend: true,
             }
@@ -786,7 +786,7 @@ export class QuestStepOverlay {
           console.log(`[QuestStepOverlay] Created overlay (4K UI fb): fb=${uiFb.framebufferId}, trigger=after, pos=(${this.position.x.toFixed(1)},${this.position.y.toFixed(1)}), size=${renderResult.width}x${renderResult.height}`);
         } else {
           this.overlayHandle = patchrs.native.beginOverlay(
-            {},
+            {framebufferId: this.uiFramebufferInfo.framebufferId},
             this.program,
             this.vertexArray,
             {

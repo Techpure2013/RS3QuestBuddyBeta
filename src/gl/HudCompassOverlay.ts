@@ -728,16 +728,16 @@ export class HudCompassOverlay {
           this.uniformBuilder.mappings.uScreenSize.write([uiFb.width, uiFb.height]);
           this.uniformBuilder.mappings.uPosition.write([this.position.x, glPositionY]);
           this.uniformBuilder.mappings.uSize.write([this.size.width, this.size.height]);
-          this.uniformBuilder.mappings.uFlipY.write([0.0]);  // No Y flip for framebuffer
+          this.uniformBuilder.mappings.uFlipY.write([1.0]); 
 
           this.overlayHandle = patchrs.native!.beginOverlay(
-            { framebufferId: uiFb.framebufferId },
+            {  },
             this.program,
             this.vertexArray,
             {
-              uniformBuffer: new Uint8Array(this.uniformBuilder.buffer.buffer.slice(0)),
+              uniformBuffer: this.uniformBuilder.buffer,
               renderMode: "triangles",
-              trigger: "after",  // 4K uses "after" to render after UI framebuffer draws
+              trigger: "frameend",  // 4K uses "after" to render after UI framebuffer draws
               uniformSources: [],
               alphaBlend: true,
             }
