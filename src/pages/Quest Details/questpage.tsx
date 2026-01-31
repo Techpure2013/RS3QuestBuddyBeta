@@ -15,6 +15,8 @@ import { IconArrowBack } from "@tabler/icons-react";
 import { CompactQuestStep } from "./Quest Detail Components/QuestStepDisplay";
 import { QuestModals } from "./Quest Detail Components/QuestModals";
 import { QuestFooter } from "./Quest Detail Components/QuestFooter";
+import { useStepHotkeys } from "./useStepHotkeys";
+
 
 import { useQuestPageFunctions } from "./questPageFunctions";
 import {
@@ -111,6 +113,27 @@ const QuestPage: React.FC = () => {
 	const questSteps = questData?.questSteps ?? [];
 	const questDetails = questData?.questDetails ?? null;
 	const questImages = questData?.questImages ?? [];
+
+	// Handle scroll when toggling between Quest Details and Quest Steps views
+	useEffect(() => {
+		if (showStepReq) {
+			// Switching to Quest Details view - scroll to top
+			window.scrollTo(0, 0);
+			scrollContainerRef.current?.scrollTo(0, 0);
+		} else {
+			// Switching to Quest Steps view - scroll to active step if saved, otherwise top
+			if (active >= 0 && !settings.isExpandedMode && settings.autoScrollEnabled) {
+				const timer = setTimeout(() => {
+					const targetElement = document.getElementById(active.toString());
+					targetElement?.scrollIntoView({ behavior: "smooth", block: "start" });
+				}, 100);
+				return () => clearTimeout(timer);
+			} else {
+				window.scrollTo(0, 0);
+				scrollContainerRef.current?.scrollTo(0, 0);
+			}
+		}
+	}, [showStepReq]);
 
 	// Smooth-scroll to active step in non-expanded mode
 	useEffect(() => {
@@ -209,6 +232,10 @@ const QuestPage: React.FC = () => {
 			setActive(highestCompleted);
 		} else if (savedActive) {
 			setActive(parseInt(savedActive, 10));
+		} else {
+			// No saved progress - scroll to top
+			window.scrollTo(0, 0);
+			scrollContainerRef.current?.scrollTo(0, 0);
 		}
 	}, [questName]);
 
@@ -320,6 +347,13 @@ const QuestPage: React.FC = () => {
 			}
 		}
 	};
+
+	// Register hotkeys for step navigation (< and > keys)
+	useStepHotkeys({
+		onNextStep: scrollNext,
+		onPrevStep: scrollPrev,
+		enabled: !showStepReq, // Only enable when viewing steps, not quest details
+	});
 
 	useAlt1Listener(scrollNext);
 

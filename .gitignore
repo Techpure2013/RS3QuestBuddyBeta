@@ -2,13 +2,13 @@
 .env
 .env.*.local
 !.env.example
-
+.omc/
 # drizzle cache/artifacts
 .drizzle
 drizzle/
 scripts/
 drizzle.config.ts
-
+dev-images/
 
 # local db data if you bind-mount
 data/

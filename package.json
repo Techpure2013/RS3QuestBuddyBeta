@@ -36,6 +36,7 @@
 		"@tiptap/starter-kit": "^2.1.16",
 		"@types/three": "^0.182.0",
 		"alt1": "0.1.0",
+		"alt1-launcher-api": "file:../alt1gl-launcher/packages/alt1-launcher-api",
 		"axios": "^1.7.9",
 		"crypto-js": "^4.2.0",
 		"dotenv": "^17.2.3",
