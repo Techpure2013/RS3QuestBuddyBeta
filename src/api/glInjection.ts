@@ -1,8 +1,8 @@
 /**
- * GL Injection API - Wrapper for alt1gl native addon
+ * GL Injection API - Detection wrapper for alt1gl native addon
  *
- * Provides high-level functions for initializing and managing
- * GL injection into the RuneScape client.
+ * Detects the native GL client provided by Alt1GL-Launcher (globalThis.alt1gl)
+ * or Alt1 (window.alt1). No manual injection — the launcher handles everything.
  */
 
 // Import native module to check availability at module load time
@@ -48,10 +48,10 @@ export function isGlInjectionAvailable(): boolean {
 }
 
 /**
- * Get the native GL API client (after injection)
+ * Get the native GL API client
  */
 export function getGlClient(): import("@injection/util/patchrs_napi").Alt1GlClient | null {
-	return patchrs?.native ?? null;
+	return patchrs?.native ?? patchrsModule.native ?? null;
 }
 
 /**
@@ -65,22 +65,21 @@ export function getInjectionState(): HookResult | null {
  * Check if RuneScape client is running
  */
 export async function isRsClientRunning(): Promise<boolean> {
-	if (!patchrs?.native) return false;
+	const client = patchrs?.native ?? patchrsModule.native;
+	if (!client) return false;
 	try {
-		const pids = patchrs.native.debug.getExePids("rs2client.exe");
-		return pids.length > 0;
+		return !!client.getRsReady();
 	} catch {
 		return false;
 	}
 }
 
 /**
- * Initialize GL injection - hooks into the first rs2client.exe found
- * Returns true if injection succeeded, false otherwise
+ * Initialize GL connection — detects native addon from launcher preload
+ * and waits for the RS client to become ready. No manual injection.
  */
 export async function initGlInjection(): Promise<boolean> {
 	try {
-		// Dynamically import the native module
 		patchrs = await import("@injection/util/patchrs_napi");
 
 		if (!patchrs.native) {
@@ -88,102 +87,39 @@ export async function initGlInjection(): Promise<boolean> {
 			return false;
 		}
 
-		// Check if already connected (e.g., launcher preload already set up globalThis.alt1gl)
-		try {
-			if (patchrs.native.getRsReady()) {
-				console.log("[glInjection] Already connected to RS client (via launcher preload)");
-				injectionState = {
-					pid: 0, // PID not known from preload path
-					dllname: "preload",
-					details: { memoryid: 0, instanceid: 0 },
-				};
-				return true;
-			}
-		} catch (e) {
-			// getRsReady may throw if not connected yet - that's fine
-		}
+		console.log("[glInjection] Native addon detected, waiting for RS client...");
 
-		// Find RS client processes
-		const pids = patchrs.native.debug.getExePids("rs2client.exe");
-		if (pids.length === 0) {
-			console.log("[glInjection] No rs2client.exe process found");
-			return false;
-		}
+		// Poll getRsReady() — the launcher has already set up shared memory,
+		// but the RS client may need a moment to render its first frame.
+		const MAX_WAIT_MS = 30000;
+		const POLL_INTERVAL_MS = 500;
+		const startTime = Date.now();
 
-		console.log(`[glInjection] Found RS client PIDs: ${pids.join(", ")}`);
-
-		// Check if the launcher's overlay is already managing this RS client.
-		// The overlay DLL creates a marker file in %TEMP% when it initializes.
-		// If this file exists, re-injecting would cause GL hook conflicts and crash.
-		const targetPid = pids[0];
-		try {
-			const fs = require("fs");
-			const os = require("os");
-			const path = require("path");
-			const markerPath = path.join(os.tmpdir(), `alt1gl-active-${targetPid}`);
-			console.log(`[glInjection] Checking for injection marker: ${markerPath}`);
-			if (fs.existsSync(markerPath)) {
-				console.log(`[glInjection] Injection marker found for PID ${targetPid} - launcher overlay is already active`);
-
-				// Read the overlay DLL path from the marker file.
-				// The overlay writes its own DLL path so we can pass it to injectDll
-				// to connect to existing shared memory without loading a second DLL.
-				let overlayDllPath = "";
-				try {
-					overlayDllPath = fs.readFileSync(markerPath, "utf-8").trim();
-				} catch (e) {
-					console.log("[glInjection] Could not read DLL path from marker file:", e);
+		while (Date.now() - startTime < MAX_WAIT_MS) {
+			try {
+				if (patchrs.native.getRsReady()) {
+					console.log("[glInjection] RS client ready");
+					injectionState = {
+						pid: 0,
+						dllname: "preload",
+						details: { memoryid: 0, instanceid: 0 },
+					};
+					return true;
 				}
-
-				if (overlayDllPath && overlayDllPath.length > 0) {
-					console.log(`[glInjection] Overlay DLL path from marker: ${overlayDllPath}`);
-					console.log("[glInjection] Connecting to existing shared memory session...");
-
-					// Call injectDll directly with the overlay DLL path.
-					// Since this DLL is already loaded in the target process,
-					// LoadLibrary just increments the ref count and injectDll
-					// connects us to the existing shared memory.
-					try {
-						const res = patchrs.native.debug.injectDll(targetPid, overlayDllPath);
-						injectionState = {
-							pid: targetPid,
-							dllname: overlayDllPath,
-							details: res,
-						};
-
-						if (res) {
-							console.log(`[glInjection] Connected to launcher overlay session for PID ${targetPid}`);
-							console.log(`[glInjection] Memory ID: ${res.memoryid}, Instance ID: ${res.instanceid}`);
-							return true;
-						} else {
-							console.log("[glInjection] injectDll returned null - failed to connect");
-							return false;
-						}
-					} catch (error) {
-						console.error("[glInjection] Error connecting to launcher overlay session:", error);
-						return false;
-					}
-				} else {
-					console.log("[glInjection] Marker file empty (old format) - falling through to standard injection");
-				}
+			} catch {
+				// getRsReady may throw if not connected yet
 			}
-			console.log("[glInjection] No injection marker found, proceeding with injection");
-		} catch (e) {
-			console.log("[glInjection] Marker check error:", e);
+			await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL_MS));
 		}
 
-		// Inject into first process (usually the main one)
-		const result = patchrs.injectClient(targetPid);
-		injectionState = result;
-
-		if (!result.details) {
-			console.log("[glInjection] Injection returned null details");
-			return false;
-		}
-
-		console.log(`[glInjection] Successfully injected into PID ${result.pid}`);
-		console.log(`[glInjection] Memory ID: ${result.details.memoryid}, Instance ID: ${result.details.instanceid}`);
-
+		// Timeout — addon is available but RS client didn't become ready.
+		// Still return true so GL features can activate when RS does connect.
+		console.warn("[glInjection] RS client not ready after 30s, continuing with addon available");
+		injectionState = {
+			pid: 0,
+			dllname: "preload",
+			details: { memoryid: 0, instanceid: 0 },
+		};
 		return true;
 	} catch (error) {
 		console.error("[glInjection] Failed to initialize:", error);
@@ -192,24 +128,17 @@ export async function initGlInjection(): Promise<boolean> {
 }
 
 /**
- * Retry injection - useful if RS client wasn't running on first try
+ * Retry initialization
  */
 export async function retryGlInjection(): Promise<boolean> {
-	console.log("[glInjection] Retrying injection...");
+	console.log("[glInjection] Retrying...");
 	return initGlInjection();
 }
 
 /**
- * Clean up injection (exit DLL)
+ * Clean up (no-op since launcher manages the connection)
  */
 export async function cleanupGlInjection(): Promise<void> {
-	if (!patchrs?.native) return;
-
-	try {
-		patchrs.native.debug.exitDll();
-		injectionState = null;
-		console.log("[glInjection] Cleaned up injection");
-	} catch (error) {
-		console.error("[glInjection] Failed to cleanup:", error);
-	}
+	injectionState = null;
+	console.log("[glInjection] Cleaned up state");
 }

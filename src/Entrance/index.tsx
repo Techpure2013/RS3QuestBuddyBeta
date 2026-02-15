@@ -1,7 +1,11 @@
-import { useEffect, useState } from "react";
+import React, { Suspense, useEffect, useState } from "react";
 import ReactDOM from "react-dom/client";
-import App from "./App";
 import { isGlInjectionAvailable, initGlInjection, getInjectionState, retryGlInjection } from "../api/glInjection";
+
+// Lazy-load App so its heavy transitive dependencies (alt1, GL pipeline, etc.)
+// are only loaded when AltGuard actually renders <App />.
+// In a regular browser, AltGuard shows the fallback UI and App never loads.
+const App = React.lazy(() => import("./App"));
 
 // Suppress known React warnings that don't affect functionality
 const originalWarn = console.warn;
@@ -99,14 +103,16 @@ const AltGuard = () => {
 
 	// In GL injection mode, skip Alt1 check entirely
 	if (isGlInjectionAvailable()) {
-		return <App />;
+		return <Suspense fallback={null}><App /></Suspense>;
 	}
 
 	if (window.alt1 || override) {
-		return <App />;
+		return <Suspense fallback={null}><App /></Suspense>;
 	}
 
 	// Fallback UI when Alt1 isn't found (web mode only)
+	const isLocal = hostname === "localhost" || hostname === "127.0.0.1";
+
 	return (
 		<div className="App">
 			<h1>ALT1 not found</h1>
@@ -115,11 +121,11 @@ const AltGuard = () => {
 					href={`alt1://addapp/${window.location.protocol}//${
 						window.location.host
 					}/${
-						!window.location.host.includes("localhost")
-							? "RS3QuestBuddy/"
+						!isLocal
+							? "RS3QuestBuddyBeta/"
 							: ""
 					}appconfig${
-						!window.location.host.includes("localhost") ? ".prod" : ".local"
+						!isLocal ? ".prod" : ".local"
 					}.json`}
 				>
 					<button className="Alt1button">Click here to add this to Alt1</button>

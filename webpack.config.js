@@ -190,7 +190,7 @@ const rendererConfig = {
 			inject: true,
 		}),
 		new webpack.IgnorePlugin({
-			resourceRegExp: /^(canvas|sharp)$/,
+			resourceRegExp: /^(canvas|sharp|electron(\/common)?)$/,
 		}),
 		new CopyWebpackPlugin({
 			patterns: [

@@ -298,10 +298,8 @@ export type Alt1GlClient = {
 
 	debug: DebugApi,
 
-	// Alt1GL Overlay Library (Optional Extension)
-	overlay?: {
-		getMousePosition(): { x: number; y: number } | null;
-	}
+	// Alt1GL Overlay Library (Optional Extension) - can be full OverlayLibrary or custom extension
+	overlay?: any;
 };
 
 function sequentialFilename(dir: string, dirfiles: string[], template: `${string}#${string}`) {
@@ -340,27 +338,34 @@ function reloadDll() {
 	native = __non_webpack_require__(newfile);
 }
 
-if (typeof globalThis !== "undefined" && globalThis.alt1gl) {
-	// Launcher preload already set up the native addon with shared memory connected.
-	// Use it directly to avoid double-injection into the RS3 process.
-	console.log("using launcher-provided native addon (globalThis.alt1gl)");
-	native = globalThis.alt1gl;
-} else if (typeof __non_webpack_require__ != "undefined") {
-	reloadDll();
-}
-// Only set up logging callback if native addon is available
-if (native && native.debug) {
-	native.debug.setLogCb(e => {
-		let m = e.match(/bufferdata (\d+)\->(\d+)/);
-		if (m) {
-			let dif = +m[1] - +m[2];
-			if (dif > 1e6) {
-				//console.log("large alloc: " + dif);
+try {
+	if (typeof globalThis !== "undefined" && globalThis.alt1gl) {
+		// Alt1GL-Launcher preload provided the native GL client directly
+		console.log("using launcher-provided native addon (globalThis.alt1gl)");
+		native = globalThis.alt1gl;
+	} else if (typeof window !== "undefined" && (window as any).alt1 && typeof (window as any).alt1.recordRenderCalls === "function") {
+		// Alt1 or launcher exposed the GL client on window.alt1
+		console.log("using native addon from window.alt1 (GL client detected)");
+		native = (window as any).alt1;
+	} else if (typeof __non_webpack_require__ != "undefined") {
+		reloadDll();
+	}
+	// Only set up logging callback if native addon is available
+	if (native && native.debug) {
+		native.debug.setLogCb(e => {
+			let m = e.match(/bufferdata (\d+)\->(\d+)/);
+			if (m) {
+				let dif = +m[1] - +m[2];
+				if (dif > 1e6) {
+					//console.log("large alloc: " + dif);
+				}
+			} else {
+				//console.info(e)
 			}
-		} else {
-			//console.info(e)
-		}
-	});
+		});
+	}
+} catch (e) {
+	console.warn("Native addon detection failed, running in web-only mode:", e);
 }
 
 export function hookFirstClient() {
