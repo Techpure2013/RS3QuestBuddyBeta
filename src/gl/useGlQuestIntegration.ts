@@ -6,8 +6,8 @@
  * - Pathfinding to step targets (with player position tracking)
  *
  * NOTE: Dialog detection uses ts/DialogBoxReader/reader.ts directly.
- * Automatically detects if running in Electron and falls back gracefully
- * in browser mode.
+ * Automatically detects if GL injection is available and falls back gracefully
+ * when not available.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -68,7 +68,7 @@ interface GlQuestIntegrationOptions {
 interface GlQuestIntegrationReturn {
 	onStepActivated: (step: QuestStep, stepIndex: number) => Promise<void>;
 	onStepDeactivated: () => Promise<void>;
-	/** Whether running in Electron (GL potentially available) */
+	/** Whether GL injection is available */
 	isGlAvailable: boolean;
 	/** Whether GL systems are fully initialized (dialog reader, overlays ready) */
 	isGlReady: boolean;
@@ -323,8 +323,7 @@ export function useGlQuestIntegration(
 							completedDialogCountsRef.current.set(lastBtn.text, currentCount + 1);
 							const totalCompleted = Array.from(completedDialogCountsRef.current.values()).reduce((a, b) => a + b, 0);
 							console.log(`[GlQuest] Button "${lastBtn.text}" PRESSED on close! (prevBr=${prevBr?.toFixed(3)}) (${currentCount + 1}/${expectedCount} for this text, ${totalCompleted} total)`);
-							// TODO: Re-enable auto-complete when ready
-							// onDialogCompleted?.();
+							onDialogCompleted?.();
 						}
 					}
 
@@ -434,8 +433,7 @@ export function useGlQuestIntegration(
 					await spriteOverlayRef.current?.stop(dialogOverlayHandleRef.current);
 					dialogOverlayHandleRef.current = null;
 					lastHighlightedButtonRef.current = null;
-					// TODO: Re-enable auto-complete when ready
-					// onDialogCompleted?.();
+					onDialogCompleted?.();
 				} else if (alreadyCompleted) {
 					console.log(`[GlQuest] Button "${lastBtn.text}" already completed ${currentCount}/${expectedCount} times, ignoring repeat click`);
 				}
@@ -459,15 +457,13 @@ export function useGlQuestIntegration(
 				if (otherButtonsRemain) {
 					// Other buttons still visible = user clicked our specific button
 					console.log(`[GlQuest] Marking complete - button clicked (other buttons still visible)`);
-					// TODO: Re-enable auto-complete when ready
-					// onDialogCompleted?.();
+					onDialogCompleted?.();
 				} else {
 					// All buttons gone at once = dialog transition or dismissal
 					// Could be: click triggered full dialog close, or walk away
 					// For single-option dialogs, still mark as complete
 					console.log(`[GlQuest] All buttons gone - likely dialog transition, marking complete`);
-					// TODO: Re-enable auto-complete when ready
-					// onDialogCompleted?.();
+					onDialogCompleted?.();
 				}
 			}
 		}

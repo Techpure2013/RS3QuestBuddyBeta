@@ -480,8 +480,9 @@ async function findFloorChunks(
 		}
 	>();
 
+	let renders: any[] = [];
 	try {
-		const renders = await state.patchrs.native.recordRenderCalls({
+		renders = await state.patchrs.native.recordRenderCalls({
 			maxframes: 1,
 			features: ["vertexarray", "uniforms"],
 		});
@@ -553,6 +554,10 @@ async function findFloorChunks(
 		}
 	} catch (e) {
 		console.error("[CollisionOverlay] Error finding floor chunks:", e);
+	} finally {
+		for (const r of renders) {
+			try { r.dispose?.(); } catch (_) {}
+		}
 	}
 
 	return foundChunks;

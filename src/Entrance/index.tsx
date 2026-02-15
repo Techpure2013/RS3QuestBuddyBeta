@@ -1,8 +1,7 @@
 import { useEffect, useState } from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
-import { isElectron } from "../api/base";
-import { initGlInjection, getInjectionState, retryGlInjection } from "../api/glInjection";
+import { isGlInjectionAvailable, initGlInjection, getInjectionState, retryGlInjection } from "../api/glInjection";
 
 // Suppress known React warnings that don't affect functionality
 const originalWarn = console.warn;
@@ -32,9 +31,9 @@ console.error = (...args) => {
 	originalError.apply(console, args);
 };
 
-// Initialize GL injection for Electron mode
-if (isElectron) {
-	console.log("Electron mode detected, initializing GL injection...");
+// Initialize GL injection if native addon is available
+if (isGlInjectionAvailable()) {
+	console.log("GL injection available, initializing...");
 	initGlInjection().then((success) => {
 		if (success) {
 			console.log("GL injection initialized successfully");
@@ -85,8 +84,8 @@ const AltGuard = () => {
 	const hostname = window.location.hostname;
 
 	useEffect(() => {
-		// Skip Alt1 identification in Electron mode
-		if (isElectron) return;
+		// Skip Alt1 identification in GL injection mode
+		if (isGlInjectionAvailable()) return;
 
 		if (window.alt1 && typeof alt1.identifyAppUrl === "function") {
 			const configUrl =
@@ -98,8 +97,8 @@ const AltGuard = () => {
 		}
 	}, [hostname]);
 
-	// In Electron mode (GL injection), skip Alt1 check entirely
-	if (isElectron) {
+	// In GL injection mode, skip Alt1 check entirely
+	if (isGlInjectionAvailable()) {
 		return <App />;
 	}
 
@@ -133,6 +132,17 @@ const AltGuard = () => {
 		</div>
 	);
 };
+
+// Apply saved theme early to prevent flash of default theme
+try {
+	const saved = localStorage.getItem("appSettings");
+	if (saved) {
+		const parsed = JSON.parse(saved);
+		if (parsed.backgroundTheme === "brown") {
+			document.documentElement.setAttribute("data-theme", "brown");
+		}
+	}
+} catch { /* ignore parse errors */ }
 
 // Base HTML font size + render
 document.querySelector("html")!.style.fontSize = "16px";

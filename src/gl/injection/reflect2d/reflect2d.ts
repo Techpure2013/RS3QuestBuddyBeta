@@ -1,6 +1,7 @@
 import * as patchrs from "../util/patchrs_napi";
 import { getProgramMeta, getRenderFunc } from "../render/renderprogram";
 import { emptySpriteInfo, imgcrc, KnownSpriteSheet, SpriteCache, SpriteInfo } from "./spritecache";
+import { dHash, hashToHex } from "../util/phash";
 import { RectLike } from "alt1";
 import * as a1lib from "alt1";
 
@@ -142,7 +143,13 @@ class AtlasTextureSnapshotCache {
 			if (spritematch) {
 				frag.known = spritematch;
 			} else {
-				this.tryMatchFontChar(sprites, frag);
+				// Try pHash matching for items (CRC32 varies across sessions)
+				const pHashMatch = this.tryMatchByPHash(sprites, frag);
+				if (pHashMatch) {
+					frag.known = pHashMatch;
+				} else {
+					this.tryMatchFontChar(sprites, frag);
+				}
 			}
 		}
 
@@ -153,6 +160,41 @@ class AtlasTextureSnapshotCache {
 		}
 
 		return frag;
+	}
+
+	/**
+	 * Try to match a sprite by pHash (perceptual hash)
+	 * Used for item identification since CRC32 varies across sessions
+	 */
+	tryMatchByPHash(sprites: SpriteCache, frag: AtlasSnapshotFragment): SpriteInfo | null {
+		// Only try pHash for reasonably sized sprites (items are typically 30-40px)
+		if (frag.width < 10 || frag.height < 10 || frag.width > 50 || frag.height > 50) {
+			return null;
+		}
+
+		try {
+			// Capture the sprite's pixels
+			const imgData = frag.basetex.capture(frag.x, frag.y, frag.width, frag.height);
+
+			// Compute pHash
+			const pHashValue = dHash(imgData.data, imgData.width, imgData.height);
+			const pHashHex = hashToHex(pHashValue);
+
+			// Look up in sprite cache
+			const match = sprites.findItemByPHash(pHashHex, 10);
+			if (match) {
+				console.log(`[pHash] Matched: ${pHashHex} -> "${match.name}" (distance: ${match.distance})`);
+				// Create a SpriteInfo for this item
+				const info = new SpriteInfo(-2, 0, frag.pixelhash); // -2 = item sprite
+				info.itemName = match.name;
+				info.pHash = match.pHash;
+				return info;
+			}
+		} catch (e) {
+			// Silently fail - not all sprites can be captured
+		}
+
+		return null;
 	}
 
 	tryMatchFontChar(sprites: SpriteCache, frag: AtlasSnapshotFragment) {
@@ -212,6 +254,7 @@ class AtlasTextureSnapshotCache {
 }
 
 export class AtlasTracker {
+	private static readonly MAX_CACHE_SIZE = 20;
 	cache = new Map<patchrs.TextureSnapshot, AtlasTextureSnapshotCache>();
 	spriteCache: SpriteCache;
 
@@ -230,14 +273,32 @@ export class AtlasTracker {
 				}
 			}
 			this.cache.set(tex, subcache);
+
+			// Evict oldest entries if cache exceeds max size
+			while (this.cache.size > AtlasTracker.MAX_CACHE_SIZE) {
+				const oldestKey = this.cache.keys().next().value;
+				if (oldestKey !== undefined) {
+					this.cache.delete(oldestKey);
+				} else {
+					break;
+				}
+			}
 		}
 		return subcache;
+	}
+
+	clearCache(): void {
+		this.cache.clear();
 	}
 }
 
 export function getUIState(renders: patchrs.RenderInvocation[], cache: AtlasTracker) {
 	let elements: RenderRect[] = [];
 	for (let render of renders) {
+		// Guard against undefined program or vertexArray
+		if (!render.program || !render.vertexArray || !render.vertexArray.attributes || render.vertexArray.attributes.length === 0) {
+			continue;
+		}
 		let progmeta = getProgramMeta(render.program);
 		if (!progmeta.isUi) { continue; }
 		let data = getRenderFunc(render);

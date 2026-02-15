@@ -17,6 +17,7 @@ import {
 } from "./playerModel";
 import type { PlayerQuestStatus, Skills } from "./types";
 import { getApiBase } from "../api/base";
+import { getQuestGroup } from "../Handlers/questGroups";
 import { parsePlayerStats } from "../Fetchers/PlayerStatsSort";
 
 /* ==========================================================================
@@ -34,7 +35,7 @@ const STORAGE_KEY = "rs3qb:player_state:v1";
 const replacementMap = new Map<string, string>([
   ["Hermy and Bass", "That Old Black Magic: Hermy and Bass"],
   ["Flesh and Bone", "That Old Black Magic: Flesh and Bone"],
-  ["Skelly by Everlight", "That Old Black Magic: Skelly by Everlight"],
+  ["Skelly by Everlight", "That Old Black Magic: Skelly By Everlight"],
   ["My One and Only Lute", "That Old Black Magic: My One and Only Lute"],
   ["Foreshadowing", "Once Upon a Time in Gielinor: Foreshadowing"],
   ["Defeating the Culinaromancer", "Recipe for Disaster: Defeating the Culinaromancer"],
@@ -160,17 +161,42 @@ const derivedSelectors: PlayerDerivedSelectors = {
     const quests = state.player.quests;
     if (!quests.length) return [];
 
-    return quests
-      .map((q) => {
-        const newTitle = replacementMap.get(q.title) ?? q.title;
+    const seen = new Set<string>();
+    const result: PlayerQuestStatus[] = [];
+
+    for (const q of quests) {
+      const newTitle = replacementMap.get(q.title) ?? q.title;
+
+      if (newTitle === "") {
+        // Parent quest mapped to empty - expand into sub-quests if it's a quest group
+        const group = getQuestGroup(q.title);
+        if (group) {
+          for (const sub of group.subquests) {
+            if (!seen.has(sub)) {
+              seen.add(sub);
+              result.push({
+                ...q,
+                title: sub,
+                questPoints: getQuestPointOverride(sub) ?? 0,
+              });
+            }
+          }
+        }
+        continue;
+      }
+
+      if (!seen.has(newTitle)) {
+        seen.add(newTitle);
         const pointOverride = getQuestPointOverride(newTitle);
-        return {
+        result.push({
           ...q,
           title: newTitle,
           questPoints: pointOverride ?? q.questPoints,
-        };
-      })
-      .filter((q) => q.title !== "");
+        });
+      }
+    }
+
+    return result;
   },
 
   completedQuests(): PlayerQuestStatus[] {
@@ -284,6 +310,11 @@ export const PlayerStore = {
       if (!raw) return;
       const parsed = JSON.parse(raw) as PlayerStoreState;
       state = migrate(parsed);
+      // Transient UI flags should never survive a page reload
+      state = produce(state, (draft) => {
+        draft.ui.loading = false;
+        draft.ui.error = null;
+      });
     } catch (err) {
       console.error("[PlayerStore] Initialize failed:", err);
       // Keep initial state
@@ -402,6 +433,11 @@ export const PlayerStore = {
     fetchAbortController = new AbortController();
     const signal = fetchAbortController.signal;
 
+    // Add 15-second timeout to prevent permanent lockup
+    const timeoutId = setTimeout(() => {
+      fetchAbortController?.abort();
+    }, 15000);
+
     this.setUi({ loading: true, error: null });
     this.setPlayer({ playerName: trimmed });
 
@@ -418,6 +454,8 @@ export const PlayerStore = {
           credentials: "same-origin",
         }),
       ]);
+
+      clearTimeout(timeoutId);
 
       // Parse hiscores
       let parsedSkills: Skills | null = null;
@@ -456,8 +494,13 @@ export const PlayerStore = {
 
       return success;
     } catch (err) {
+      clearTimeout(timeoutId);
+
       if ((err as Error).name === "AbortError") {
-        // Silent on abort
+        // Only reset loading if no newer request has taken over
+        if (fetchAbortController?.signal === signal) {
+          this.setUi({ loading: false, error: null });
+        }
         return false;
       }
 

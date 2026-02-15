@@ -1,6 +1,6 @@
 // src/hooks/useImprovedVersionCheck.ts
 import { useState, useEffect, useRef, useCallback } from "react";
-import { isElectron, getApiBase } from "../../api/base";
+import { getApiBase } from "../../api/base";
 
 /**
  * Improved version checking with:
@@ -41,7 +41,7 @@ export const useImprovedVersionCheck = () => {
 
 		try {
 			// Use cache-busting but with ETag support
-			const versionUrl = isElectron ? `${getApiBase()}/version` : "/version.json";
+			const versionUrl = "/version.json";
 			const response = await fetch(versionUrl, {
 				cache: "no-cache",
 				headers: {

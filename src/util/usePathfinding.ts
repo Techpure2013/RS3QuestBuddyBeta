@@ -101,7 +101,7 @@ export interface UsePathfindingOptions {
   onDestinationReached?: () => void;
   /** Callback when player uses a transport (teleport, stairs, etc.) */
   onTransportUsed?: (from: PathCoordinate, to: PathCoordinate) => void;
-  /** Enable GL overlay visualization (Electron only) */
+  /** Enable GL overlay visualization (GL injection only) */
   enableOverlay?: boolean;
   /** Highlight destination tile */
   highlightDestination?: boolean;
@@ -218,7 +218,7 @@ export function usePathfinding(options: UsePathfindingOptions = {}): UsePathfind
           lastCalculationRef.current = from;
           onPathCalculated?.(result);
 
-          // Draw path overlay in Electron
+          // Draw path overlay via GL injection
           if (enableOverlay && result.path.length > 0) {
             const gl = await getGlOverlays();
             if (gl) {

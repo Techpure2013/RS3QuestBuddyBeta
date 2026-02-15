@@ -658,52 +658,64 @@ export class HudCompassOverlay {
 
     try {
       // Record from screen (fb 0) to find the Lanczos scaler
-      const screenRenders = await patchrs.native.recordRenderCalls({
-        maxframes: 1,
-        features: ["texturesnapshot"],
-        framebufferId: 0,
-      });
+      let screenRenders: any[] = [];
+      let uiRenders: any[] = [];
 
-      console.log(`[HudCompass] findUIFramebuffer: Got ${screenRenders.length} renders from fb 0`);
-
-      // Find the Lanczos scaler and get its source texture
-      let scalingTextureId = 0;
-      for (const render of screenRenders) {
-        if (!render.program) continue;
-        const meta = getProgramMeta(render.program);
-        if (meta.isUiScaler) {
-          const textureData = render.samplers || (render as any).textures || {};
-          const sampler = Object.values(textureData)[0] as patchrs.TextureSnapshot | patchrs.TrackedTexture | undefined;
-          if (sampler) {
-            scalingTextureId = sampler.texid;
-            console.log(`[HudCompass] Found Lanczos scaler reading from texture ${scalingTextureId}`);
-            break;
-          }
-        }
-      }
-
-      if (scalingTextureId > 0) {
-        // Record from the UI framebuffer (the one with the scaling texture)
-        const uiRenders = await patchrs.native.recordRenderCalls({
+      try {
+        screenRenders = await patchrs.native.recordRenderCalls({
           maxframes: 1,
-          features: [],
-          framebufferTexture: scalingTextureId,
+          features: ["texturesnapshot"],
+          framebufferId: 0,
         });
 
-        const uiRender = uiRenders.find(r => r.viewport);
-        if (uiRender && uiRender.viewport) {
-          this.uiFramebufferInfo = {
-            framebufferId: uiRender.framebufferId,
-            width: uiRender.viewport.width,
-            height: uiRender.viewport.height,
-          };
-          console.log(`[HudCompass] Found UI framebuffer: fb=${this.uiFramebufferInfo.framebufferId}, size=${this.uiFramebufferInfo.width}x${this.uiFramebufferInfo.height}`);
-          return this.uiFramebufferInfo;
+        console.log(`[HudCompass] findUIFramebuffer: Got ${screenRenders.length} renders from fb 0`);
+
+        // Find the Lanczos scaler and get its source texture
+        let scalingTextureId = 0;
+        for (const render of screenRenders) {
+          if (!render.program) continue;
+          const meta = getProgramMeta(render.program);
+          if (meta.isUiScaler) {
+            const textureData = render.samplers || (render as any).textures || {};
+            const sampler = Object.values(textureData)[0] as patchrs.TextureSnapshot | patchrs.TrackedTexture | undefined;
+            if (sampler) {
+              scalingTextureId = sampler.texid;
+              console.log(`[HudCompass] Found Lanczos scaler reading from texture ${scalingTextureId}`);
+              break;
+            }
+          }
+        }
+
+        if (scalingTextureId > 0) {
+          // Record from the UI framebuffer (the one with the scaling texture)
+          uiRenders = await patchrs.native.recordRenderCalls({
+            maxframes: 1,
+            features: [],
+            framebufferTexture: scalingTextureId,
+          });
+
+          const uiRender = uiRenders.find(r => r.viewport);
+          if (uiRender && uiRender.viewport) {
+            this.uiFramebufferInfo = {
+              framebufferId: uiRender.framebufferId,
+              width: uiRender.viewport.width,
+              height: uiRender.viewport.height,
+            };
+            console.log(`[HudCompass] Found UI framebuffer: fb=${this.uiFramebufferInfo.framebufferId}, size=${this.uiFramebufferInfo.width}x${this.uiFramebufferInfo.height}`);
+            return this.uiFramebufferInfo;
+          }
+        }
+
+        console.log("[HudCompass] UI framebuffer not found");
+        return null;
+      } finally {
+        for (const r of screenRenders) {
+          try { r.dispose?.(); } catch (_) {}
+        }
+        for (const r of uiRenders) {
+          try { r.dispose?.(); } catch (_) {}
         }
       }
-
-      console.log("[HudCompass] UI framebuffer not found");
-      return null;
     } catch (e) {
       console.warn("[HudCompass] Error finding UI framebuffer:", e);
       return null;

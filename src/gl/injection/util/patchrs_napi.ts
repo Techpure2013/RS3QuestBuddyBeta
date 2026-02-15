@@ -296,7 +296,12 @@ export type Alt1GlClient = {
 	beginOverlay(trigger: RenderFilter, prog: GlProgram | undefined, vertexarray: VertexArraySnapshot | undefined, options: GlOverlayOption): GlOverlay;
 	// stopOverlay(id: GlOverlay): void;
 
-	debug: DebugApi
+	debug: DebugApi,
+
+	// Alt1GL Overlay Library (Optional Extension)
+	overlay?: {
+		getMousePosition(): { x: number; y: number } | null;
+	}
 };
 
 function sequentialFilename(dir: string, dirfiles: string[], template: `${string}#${string}`) {
@@ -335,11 +340,13 @@ function reloadDll() {
 	native = __non_webpack_require__(newfile);
 }
 
-if (typeof __non_webpack_require__ != "undefined") {
-	reloadDll();
-} else if (typeof globalThis !== "undefined" && globalThis.alt1gl) {
-	// cef based api in global scope
+if (typeof globalThis !== "undefined" && globalThis.alt1gl) {
+	// Launcher preload already set up the native addon with shared memory connected.
+	// Use it directly to avoid double-injection into the RS3 process.
+	console.log("using launcher-provided native addon (globalThis.alt1gl)");
 	native = globalThis.alt1gl;
+} else if (typeof __non_webpack_require__ != "undefined") {
+	reloadDll();
 }
 // Only set up logging callback if native addon is available
 if (native && native.debug) {

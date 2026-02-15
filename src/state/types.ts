@@ -189,6 +189,13 @@ export type QuestDetails = {
 	EnemiesToDefeat: string[];
 };
 
+export type StepCompletionConditions = {
+	type: "dialog" | "location" | "items" | "mixed";
+	dialog?: string[];
+	location?: Array<{ lat: number; lng: number; floor?: number; radius?: number }>;
+	items?: Array<{ name: string; quantity: number }>;
+};
+
 export type QuestStep = {
 	stepDescription: string;
 	itemsNeeded?: string[];
@@ -198,6 +205,7 @@ export type QuestStep = {
 	highlights: QuestHighlights;
 	floor: number;
 	stepId?: number;
+	completionConditions?: StepCompletionConditions | null;
 };
 
 export type QuestImage = {
@@ -231,6 +239,7 @@ export type NormalizedQuestStep = {
 	dialogOptions: string[];
 	highlights: QuestHighlights;
 	floor: number;
+	completionConditions?: StepCompletionConditions | null;
 };
 
 export type QuestBundle = {
@@ -260,6 +269,7 @@ type StepIn = {
 	highlights?: QuestHighlights;
 	floor?: number;
 	stepId?: number;
+	completionConditions?: unknown;
 };
 
 const toLinesArray = (v: unknown): string[] => {
@@ -306,6 +316,7 @@ export function bundleToQuest(b: QuestBundle): Quest {
 			highlights: s.highlights ?? { npc: [], object: [] },
 			floor: Number.isFinite(s.floor as number) ? (s.floor as number) : 0,
 			stepId: typeof s.stepId === "number" ? s.stepId : undefined,
+			completionConditions: (s as any).completionConditions ?? null,
 		})),
 		questDetails: {
 			Quest: b.details.Quest,

@@ -22,6 +22,8 @@ export interface SettingsState {
 	hudCompassEnabled: boolean;
 	hudCompassX: number;
 	hudCompassY: number;
+	inventoryTrackingEnabled: boolean;
+	autoAdvanceEnabled: boolean;
 	// UI Settings
 	toolTipsEnabled: boolean;
 	autoScrollEnabled: boolean;
@@ -55,6 +57,8 @@ const defaultSettings: SettingsState = {
 	hudCompassEnabled: false,
 	hudCompassX: 1700,
 	hudCompassY: 900,
+	inventoryTrackingEnabled: false,
+	autoAdvanceEnabled: false,
 	// UI Settings
 	toolTipsEnabled: true,
 	backgroundTheme: "default",

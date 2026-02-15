@@ -53,14 +53,19 @@ export class PlayerPositionTracker {
    * Get current player position (one-shot capture)
    */
   async getPosition(): Promise<PlayerPosition | null> {
+    let renders: any[] = [];
     try {
-      const renders = await patchrs.native.recordRenderCalls({ maxframes: 1,
+      renders = await patchrs.native.recordRenderCalls({ maxframes: 1,
         features: ["vertexarray", "uniforms"],
       });
       return this.findPlayer(renders);
     } catch (e) {
       if (this.debug) console.error("[PlayerPosition] Capture error:", e);
       return null;
+    } finally {
+      for (const r of renders) {
+        try { r.dispose?.(); } catch (_) {}
+      }
     }
   }
 
@@ -279,13 +284,18 @@ export class PlayerPositionTracker {
    * Get camera info only
    */
   async getCamera(): Promise<CameraInfo | null> {
+    let renders: any[] = [];
     try {
-      const renders = await patchrs.native.recordRenderCalls({ maxframes: 1,
+      renders = await patchrs.native.recordRenderCalls({ maxframes: 1,
         features: ["uniforms"],
       });
       return this.extractCamera(renders);
     } catch {
       return null;
+    } finally {
+      for (const r of renders) {
+        try { r.dispose?.(); } catch (_) {}
+      }
     }
   }
 

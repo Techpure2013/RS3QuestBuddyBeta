@@ -65,9 +65,10 @@ function calculateAssumedUISize(screenWidth: number, screenHeight: number): { ui
 async function detectViewportFromRenders(): Promise<{ width: number; height: number } | null> {
   if (!state.patchrs?.native) return null;
 
+  let renders: any[] = [];
   try {
     console.log(`[UIScaleManager] Detecting viewport from render data...`);
-    const renders = await state.patchrs.native.recordRenderCalls({
+    renders = await state.patchrs.native.recordRenderCalls({
       maxframes: 1,
       features: [],
     });
@@ -83,6 +84,10 @@ async function detectViewportFromRenders(): Promise<{ width: number; height: num
   } catch (e) {
     console.warn(`[UIScaleManager] Viewport detection failed:`, e);
     return null;
+  } finally {
+    for (const r of renders) {
+      try { r.dispose?.(); } catch (_) {}
+    }
   }
 }
 
@@ -98,10 +103,11 @@ async function detectDPIScaling(): Promise<{
 } | null> {
   if (!state.patchrs?.native) return null;
 
+  let renders: any[] = [];
   try {
     const { getProgramMeta } = await import("@injection/render/renderprogram");
 
-    const renders = await state.patchrs.native.recordRenderCalls({
+    renders = await state.patchrs.native.recordRenderCalls({
       maxframes: 1,
       features: ["texturesnapshot"],
       framebufferId: 0,
@@ -127,6 +133,10 @@ async function detectDPIScaling(): Promise<{
   } catch (e) {
     console.warn("[UIScaleManager] DPI detection failed:", e);
     return null;
+  } finally {
+    for (const r of renders) {
+      try { r.dispose?.(); } catch (_) {}
+    }
   }
 }
 
@@ -220,9 +230,10 @@ function startScaleMonitoring(): void {
   // Monitor for resolution changes every 2 seconds
   const monitorScale = async () => {
     while (state.stream !== null && state.patchrs?.native) {
+      let renders: any[] = [];
       try {
         // Get viewport from render data (most reliable)
-        const renders = await state.patchrs.native.recordRenderCalls({
+        renders = await state.patchrs.native.recordRenderCalls({
           maxframes: 1,
           features: [],
         });
@@ -280,6 +291,10 @@ function startScaleMonitoring(): void {
           console.warn("[UIScaleManager] Monitoring error:", e);
         }
         await new Promise(resolve => setTimeout(resolve, 5000));
+      } finally {
+        for (const r of renders) {
+          try { r.dispose?.(); } catch (_) {}
+        }
       }
     }
   };

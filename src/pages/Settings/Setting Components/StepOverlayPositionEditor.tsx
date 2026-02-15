@@ -15,7 +15,7 @@ import {
   type UIBoundsResult,
   isUIBoundsDetectorInitialized,
 } from "../../../gl/UIBoundsDetector";
-import { isElectron } from "../../../api/base";
+import { isGlInjectionAvailable } from "../../../api/glInjection";
 
 // Snap distance threshold in preview pixels (not screen pixels)
 // This makes snapping feel consistent regardless of screen resolution
@@ -344,9 +344,9 @@ const StepOverlayPositionEditor: React.FC<StepOverlayPositionEditorProps> = ({
     };
   }, [isDragging, handleMouseMove, handleMouseUp]);
 
-  // Auto-capture screenshot on mount in Electron mode
+  // Auto-capture screenshot on mount when GL injection is available
   useEffect(() => {
-    if (isElectron && !screenshotUrl && !isDetecting) {
+    if (isGlInjectionAvailable() && !screenshotUrl && !isDetecting) {
       // Small delay to ensure component is fully mounted
       const timer = setTimeout(() => {
         handleDetectUI();
@@ -395,7 +395,7 @@ const StepOverlayPositionEditor: React.FC<StepOverlayPositionEditorProps> = ({
     <Stack gap="xs">
       {/* Controls row */}
       <Group gap="xs">
-        {isElectron && (
+        {isGlInjectionAvailable() && (
           <Button
             variant="light"
             size="xs"

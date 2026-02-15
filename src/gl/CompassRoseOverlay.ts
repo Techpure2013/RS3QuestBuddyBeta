@@ -287,8 +287,9 @@ async function findFloorForLocation(
 	const targetChunkZ = Math.floor(targetLat / CHUNK_SIZE);
 	console.log(`[CompassRose] Looking for floor chunk (${targetChunkX}, ${targetChunkZ}) for target at (${targetLat.toFixed(1)}, ${targetLng.toFixed(1)})`);
 
+	let renders: any[] = [];
 	try {
-		const renders = await state.patchrs.native.recordRenderCalls({
+		renders = await state.patchrs.native.recordRenderCalls({
 			maxframes: 1,
 			features: ["uniforms"],
 			...(state.knownFloorProgramId !== null ? { skipProgramMask: WRONG_PROG_MASK } : {}),
@@ -363,6 +364,10 @@ async function findFloorForLocation(
 		};
 	} catch (e) {
 		console.error("[CompassRose] Error finding floor for location:", e);
+	} finally {
+		for (const r of renders) {
+			try { r.dispose?.(); } catch (_) {}
+		}
 	}
 
 	return null;
@@ -379,6 +384,7 @@ async function findFloorVaoAndFramebuffer(): Promise<{ vaoId: number; framebuffe
 		return null;
 	}
 
+	let renders: any[] = [];
 	try {
 		const needsInputs = state.knownFloorProgramId === null;
 		const features: ("vertexarray" | "uniforms")[] = needsInputs ? ["vertexarray", "uniforms"] : ["uniforms"];
@@ -386,7 +392,7 @@ async function findFloorVaoAndFramebuffer(): Promise<{ vaoId: number; framebuffe
 		// IMPORTANT: Don't use skipProgramMask when looking for floor program for the first time
 		// Otherwise if no floor renders were present during initialization, ALL programs get marked
 		// as "wrong" and will be skipped forever, returning 0 renders
-		const renders = await state.patchrs.native.recordRenderCalls({
+		renders = await state.patchrs.native.recordRenderCalls({
 			maxframes: 1,
 			features,
 			...(state.knownFloorProgramId !== null ? { skipProgramMask: WRONG_PROG_MASK } : {}),
@@ -434,6 +440,10 @@ async function findFloorVaoAndFramebuffer(): Promise<{ vaoId: number; framebuffe
 		console.log(`[CompassRose] No floor VAO found`);
 	} catch (e) {
 		console.error("[CompassRose] Error finding floor VAO and framebuffer:", e);
+	} finally {
+		for (const r of renders) {
+			try { r.dispose?.(); } catch (_) {}
+		}
 	}
 
 	return null;

@@ -1,5 +1,20 @@
 import { crc32 } from "../util/crc32";
+import { dHash, hashToHex, hexToHash, hammingDistance, isSimilar } from "../util/phash";
 import { AtlasSnapshotFragment } from "./reflect2d";
+
+// API endpoint for items
+const API_BASE = process.env.REACT_APP_API_URL || "http://localhost:42069";
+const ITEMS_API = `${API_BASE}/api/items`;
+
+// API item type
+interface ApiItem {
+    id: number;
+    pHash: string;
+    name: string;
+    firstSeen: string;
+    createdAt: string;
+    updatedAt: string;
+}
 
 // sprite hash files generated using runeapps model viewer https://runeapps.org/modelviewer
 // scripts->cli->run
@@ -10,7 +25,13 @@ const spritehashes = require("!!file-loader?name=data/[name].[ext]!./data/sprite
 // extract -m fonthash --batchsize=1000000
 const fontfile = require("!!file-loader?name=data/[name].[ext]!./data/fonthash.batch.json");
 // created manually using the tools in UI State
+const chat10ptfile = require("!!file-loader?name=data/[name].[ext]!./data/chat10pt.json");
 const chat12ptfile = require("!!file-loader?name=data/[name].[ext]!./data/chat12pt.json");
+const chat14ptfile = require("!!file-loader?name=data/[name].[ext]!./data/chat14pt.json");
+const chat16ptfile = require("!!file-loader?name=data/[name].[ext]!./data/chat16pt.json");
+const chat18ptfile = require("!!file-loader?name=data/[name].[ext]!./data/chat18pt.json");
+const chat20ptfile = require("!!file-loader?name=data/[name].[ext]!./data/chat20pt.json");
+const chat22ptfile = require("!!file-loader?name=data/[name].[ext]!./data/chat22pt.json");
 const s8x11ptfile = require("!!file-loader?name=data/[name].[ext]!./data/8x11Chars.json");
 const s11x12ptfile = require("!!file-loader?name=data/[name].[ext]!./data/11x12Chars.json");
 const s7x9ptfile = require("!!file-loader?name=data/[name].[ext]!./data/7x9Chars.json");
@@ -61,8 +82,10 @@ export class SpriteInfo {
     id: number;
     subid: number;
     hash: number;
+    pHash: string | null = null;      // Perceptual hash (stable across sessions)
     fontchr: FontSpriteChar | null = null;
     font: KnownSpriteSheet | null = null;
+    itemName: string | null = null;   // Item name from Item-Hashes.json
     synonym: SpriteInfo;//circular linked list of synonyms
     constructor(id: number, subid: number, hash: number) {
         this.id = id;
@@ -186,11 +209,119 @@ export const emptySpriteInfo = new SpriteInfo(-1, 0, imgcrc(whitePixelImage));
 export class SpriteCache {
     hashes = new Map<number, SpriteInfo>();
     fonts = new Map<number, KnownSpriteSheet>();
+    pHashItems = new Map<string, string>(); // pHash hex -> item name
     readyResolvers = Promise.withResolvers<void>();
     ready = this.readyResolvers.promise;
 
     constructor() {
         this.hashes.set(emptySpriteInfo.hash, emptySpriteInfo);
+    }
+
+    /**
+     * Load item hashes from API
+     * Uses pHash (perceptual hash) for cross-session stable item identification
+     */
+    async loadItemHashes(): Promise<void> {
+        try {
+            console.log(`[SpriteCache] Loading items from API: ${ITEMS_API}`);
+            const response = await fetch(`${ITEMS_API}?limit=500`);
+            if (!response.ok) {
+                console.warn(`[SpriteCache] API returned ${response.status}`);
+                return;
+            }
+            const result = await response.json() as { items: ApiItem[]; total: number };
+            const items = result.items || [];
+            let loaded = 0;
+            for (const item of items) {
+                if (!item.name || !item.pHash) continue;
+
+                this.pHashItems.set(item.pHash, item.name);
+                loaded++;
+            }
+            console.log(`[SpriteCache] Loaded ${loaded} items from API`);
+        } catch (err) {
+            console.error("[SpriteCache] Failed to load item hashes from API:", err);
+        }
+    }
+
+    /**
+     * Get item name by perceptual hash (exact match)
+     * @param pHashHex - 16-character hex string of the perceptual hash
+     * @returns Item name or null if not found
+     */
+    getItemByPHash(pHashHex: string): string | null {
+        return this.pHashItems.get(pHashHex) ?? null;
+    }
+
+    /**
+     * Find item by perceptual hash with fuzzy matching
+     * Uses Hamming distance to find visually similar items
+     * @param pHashHex - 16-character hex string of the perceptual hash
+     * @param threshold - Maximum Hamming distance (default: 10, lower = stricter)
+     * @returns Best match or null
+     */
+    findItemByPHash(pHashHex: string, threshold: number = 10): { name: string; distance: number; pHash: string } | null {
+        // First try exact match
+        const exactName = this.pHashItems.get(pHashHex);
+        if (exactName) {
+            return { name: exactName, distance: 0, pHash: pHashHex };
+        }
+
+        // Fuzzy match using Hamming distance
+        const targetHash = hexToHash(pHashHex);
+        let bestMatch: { name: string; distance: number; pHash: string } | null = null;
+
+        for (const [storedPHash, name] of this.pHashItems) {
+            const storedHash = hexToHash(storedPHash);
+            const distance = hammingDistance(targetHash, storedHash);
+
+            if (distance <= threshold) {
+                if (!bestMatch || distance < bestMatch.distance) {
+                    bestMatch = { name, distance, pHash: storedPHash };
+                }
+            }
+        }
+
+        // Debug: log search if we have items to search
+        if (this.pHashItems.size > 0 && !bestMatch) {
+            // Only log occasionally to avoid spam
+            if (Math.random() < 0.01) {
+                console.log(`[SpriteCache] No pHash match for ${pHashHex} (${this.pHashItems.size} items in DB)`);
+            }
+        }
+
+        return bestMatch;
+    }
+
+    /**
+     * Check if an item exists by pHash
+     */
+    hasItemByPHash(pHashHex: string): boolean {
+        return this.pHashItems.has(pHashHex);
+    }
+
+    /**
+     * Reverse lookup: get pHash by item name (case-insensitive)
+     * Returns the first matching pHash or null
+     */
+    getItemPHashByName(name: string): string | null {
+        const lowerName = name.toLowerCase();
+        for (const [pHash, itemName] of this.pHashItems) {
+            if (itemName.toLowerCase() === lowerName) {
+                return pHash;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Get all known items (for debugging/display)
+     */
+    getAllItems(): Array<{ pHash: string; name: string }> {
+        return Array.from(this.pHashItems.entries()).map(([pHash, name]) => ({
+            pHash,
+            name,
+        }));
     }
 
     addSprite(info: SpriteInfo) {
@@ -236,14 +367,34 @@ export class SpriteCache {
         let fontdata: ParsedFontJson[] = await fetch(fontfile.default).then(res => res.json());
         this.loadCacheFontFile(fontdata);
 
-        let chat12ptdata: CustomJsonFont = await fetch(chat12ptfile.default).then(res => res.json());
+        // Load all chat font sizes (10pt - 22pt)
+        const chat10ptdata: CustomJsonFont = await fetch(chat10ptfile.default).then(res => res.json());
+        this.loadCustomFontFile(chat10ptdata);
+        const chat12ptdata: CustomJsonFont = await fetch(chat12ptfile.default).then(res => res.json());
         this.loadCustomFontFile(chat12ptdata);
-        let s8x11ptdata: CustomJsonFont = await fetch(s8x11ptfile.default).then(res => res.json());
+        const chat14ptdata: CustomJsonFont = await fetch(chat14ptfile.default).then(res => res.json());
+        this.loadCustomFontFile(chat14ptdata);
+        const chat16ptdata: CustomJsonFont = await fetch(chat16ptfile.default).then(res => res.json());
+        this.loadCustomFontFile(chat16ptdata);
+        const chat18ptdata: CustomJsonFont = await fetch(chat18ptfile.default).then(res => res.json());
+        this.loadCustomFontFile(chat18ptdata);
+        const chat20ptdata: CustomJsonFont = await fetch(chat20ptfile.default).then(res => res.json());
+        this.loadCustomFontFile(chat20ptdata);
+        const chat22ptdata: CustomJsonFont = await fetch(chat22ptfile.default).then(res => res.json());
+        this.loadCustomFontFile(chat22ptdata);
+
+        // Load other font formats
+        const s8x11ptdata: CustomJsonFont = await fetch(s8x11ptfile.default).then(res => res.json());
         this.loadCustomFontFile(s8x11ptdata);
-        let s11x12ptdata: CustomJsonFont = await fetch(s11x12ptfile.default).then(res => res.json());
+        const s11x12ptdata: CustomJsonFont = await fetch(s11x12ptfile.default).then(res => res.json());
         this.loadCustomFontFile(s11x12ptdata);
-        let s7x9ptdata: CustomJsonFont = await fetch(s7x9ptfile.default).then(res => res.json());
+        const s7x9ptdata: CustomJsonFont = await fetch(s7x9ptfile.default).then(res => res.json());
         this.loadCustomFontFile(s7x9ptdata);
+
+        console.log(`[SpriteCache] Loaded ${this.fonts.size} font sheets with ${this.hashes.size} character hashes`);
+
+        // Load discovered item hashes from API
+        await this.loadItemHashes();
     }
 }
 

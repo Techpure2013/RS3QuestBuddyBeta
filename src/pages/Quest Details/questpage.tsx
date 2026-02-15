@@ -45,6 +45,9 @@ import {
 	writeSession,
 } from "./../../idb/playerSessionStore";
 import { usePlayerSelector } from "./../../state/usePlayerSelector";
+import { QuestEngine } from "../../engine/QuestEngine";
+import { getInventoryMonitor, getGLBridge } from "../../integration/QuestStateEngineIntegration";
+import { startPlayerTracking, stopPlayerTracking, getPlayerPosition } from "../../gl/PlayerPositionTracker";
 
 const QuestDetailContents = lazy(
 	() => import("./Quest Detail Components/QuestDetailsAccordion"),
@@ -60,6 +63,7 @@ const QuestPage: React.FC = () => {
 		ignoredRequirements,
 	} = useQuestPageFunctions();
 	const { settings, openSettingsModal, closeSettingsModal } = useSettings();
+	const autoAdvanceEnabled = settings.autoAdvanceEnabled ?? false;
 	const skillLevels = usePlayerSelector((s) => s.player.skills);
 	const completedQuests = usePlayerSelector((_, d) => d.completedQuests());
 
@@ -88,7 +92,10 @@ const QuestPage: React.FC = () => {
 		hudCompassEnabled: settings.hudCompassEnabled,
 		hudCompassX: settings.hudCompassX,
 		hudCompassY: settings.hudCompassY,
-		onDialogCompleted: markDialogCompleted,
+		onDialogCompleted: () => {
+			markDialogCompleted();
+			questEngineRef.current?.markDialogCompleted();
+		},
 	});
 
 	const handles = useQuestControllerStore();
@@ -96,6 +103,39 @@ const QuestPage: React.FC = () => {
 
 	const scrollContainerRef = useRef<HTMLDivElement>(null);
 	const scrollNextRef = useRef<() => void>(() => {}); // For auto-step completion
+	const questEngineRef = useRef<QuestEngine | null>(null);
+
+	// Lazily initialize QuestEngine (passively fails if not ready)
+	if (!questEngineRef.current) {
+		try {
+			questEngineRef.current = new QuestEngine({
+				onStepComplete: () => {
+					try { scrollNextRef.current?.(); } catch { /* passive */ }
+				},
+				getPlayerPosition: () => {
+					try {
+						const pos = getPlayerPosition();
+						if (!pos) return null;
+						return { lat: pos.location.lat, lng: pos.location.lng, floor: pos.floor };
+					} catch { return null; }
+				},
+				getInventoryItems: () => {
+					try {
+						const monitor = getInventoryMonitor();
+						return monitor?.getCurrentItems() ?? [];
+					} catch { return []; }
+				},
+				getItemPHash: (name: string) => {
+					try {
+						const bridge = getGLBridge();
+						return bridge?.getSpriteCache().getItemPHashByName(name) ?? null;
+					} catch { return null; }
+				},
+			});
+		} catch {
+			// QuestEngine not available yet — passive fail
+		}
+	}
 	const { questName: encodedQuestName } = useParams<{ questName: string }>();
 	const questName = decodeURIComponent(encodedQuestName ?? "");
 
@@ -122,7 +162,7 @@ const QuestPage: React.FC = () => {
 			scrollContainerRef.current?.scrollTo(0, 0);
 		} else {
 			// Switching to Quest Steps view - scroll to active step if saved, otherwise top
-			if (active >= 0 && !settings.isExpandedMode && settings.autoScrollEnabled) {
+			if (active >= 0 && settings.autoScrollEnabled) {
 				const timer = setTimeout(() => {
 					const targetElement = document.getElementById(active.toString());
 					targetElement?.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -135,9 +175,9 @@ const QuestPage: React.FC = () => {
 		}
 	}, [showStepReq]);
 
-	// Smooth-scroll to active step in non-expanded mode
+	// Smooth-scroll to active step
 	useEffect(() => {
-		if (active === -1 || settings.isExpandedMode || !settings.autoScrollEnabled)
+		if (active === -1 || !settings.autoScrollEnabled)
 			return;
 		const timer = setTimeout(() => {
 			const targetElement = document.getElementById(active.toString());
@@ -172,20 +212,36 @@ const QuestPage: React.FC = () => {
 		if (currentStep) {
 			// Extract dialog options and additional info from the step if available
 			const dialogOptions = currentStep.dialogOptions || undefined;
-			const additionalInfo = currentStep.additionalStepInformation || undefined;
+			const baseInfo = currentStep.additionalStepInformation || [];
 			const requiredItems = currentStep.itemsNeeded || undefined;
 			const recommendedItems = currentStep.itemsRecommended || undefined;
+
+			// Build completion conditions summary for overlay
+			const conditionsInfo: string[] = [];
+			const cc = currentStep.completionConditions;
+			if (cc && autoAdvanceEnabled) {
+				const parts: string[] = [];
+				if (cc.dialog && cc.dialog.length > 0) parts.push(`Dialog (${cc.dialog.length})`);
+				if (cc.location && cc.location.length > 0) parts.push(`Location (${cc.location.length})`);
+				if (cc.items && cc.items.length > 0) parts.push(`Items (${cc.items.length})`);
+				if (parts.length > 0) {
+					conditionsInfo.push(`Auto-advance: ${parts.join(" + ")}`);
+				}
+			}
+
+			const additionalInfo = [...baseInfo, ...conditionsInfo];
+
 			showStepOverlay(
 				active,
 				questSteps.length,
 				currentStep.stepDescription,
 				dialogOptions,
-				additionalInfo,
+				additionalInfo.length > 0 ? additionalInfo : undefined,
 				requiredItems,
 				recommendedItems
 			);
 		}
-	}, [active, questSteps, settings.stepOverlayEnabled, isStepOverlayAvailable, showStepOverlay, hideStepOverlay]);
+	}, [active, questSteps, settings.stepOverlayEnabled, isStepOverlayAvailable, showStepOverlay, hideStepOverlay, autoAdvanceEnabled]);
 
 	// Load quest bundle (cache first, then ensure fresh)
 	useEffect(() => {
@@ -270,6 +326,9 @@ const QuestPage: React.FC = () => {
 				console.log(`[QuestPage] Activating GL overlays for restored step ${active}`);
 				initialGlActivatedRef.current = true;
 				onStepActivated(currentStep, active);
+				// Also activate quest engine for the restored step
+				questEngineRef.current?.activateStep(currentStep);
+				questEngineRef.current?.checkInventory();
 			}
 		}
 	}, [isGlReady, active, questSteps, onStepActivated]);
@@ -305,11 +364,19 @@ const QuestPage: React.FC = () => {
 
 			const currentStep = questSteps?.[nextStep];
 
-			// Activate GL overlays for NPCs/objects (always in Electron mode)
+			// Activate GL overlays for NPCs/objects when GL is available
 			if (isGlAvailable && currentStep) {
 				onStepActivated(currentStep, nextStep);
 			} else if (nextStep === -1 && isGlAvailable) {
 				onStepDeactivated();
+			}
+
+			// Activate quest engine for the new step
+			if (currentStep) {
+				questEngineRef.current?.activateStep(currentStep);
+				questEngineRef.current?.checkInventory();
+			} else {
+				questEngineRef.current?.deactivateStep();
 			}
 		}
 	};
@@ -329,9 +396,53 @@ const QuestPage: React.FC = () => {
 		if (isGlAvailable && questSteps?.[nextStep]) {
 			onStepActivated(questSteps[nextStep], nextStep);
 		}
+
+		// Activate quest engine for the new step
+		if (questSteps?.[nextStep]) {
+			questEngineRef.current?.activateStep(questSteps[nextStep]);
+			questEngineRef.current?.checkInventory();
+		}
 	};
 	// Keep ref updated for auto-step completion callback
 	scrollNextRef.current = scrollNext;
+
+	// Sync QuestEngine enabled state with settings (passively fails if not ready)
+	useEffect(() => {
+		try { questEngineRef.current?.setEnabled(autoAdvanceEnabled); } catch { /* passive */ }
+
+		if (autoAdvanceEnabled) {
+			try {
+				startPlayerTracking(
+					(pos) => {
+						try {
+							questEngineRef.current?.onPositionUpdate({
+								lat: pos.location.lat,
+								lng: pos.location.lng,
+								floor: pos.floor,
+							});
+						} catch { /* passive */ }
+					},
+					1000,
+					"quest-engine"
+				);
+			} catch { /* passive - tracking not available */ }
+
+			const inventoryInterval = setInterval(() => {
+				try { questEngineRef.current?.checkInventory(); } catch { /* passive */ }
+			}, 2000);
+
+			return () => {
+				try { stopPlayerTracking(true, "quest-engine"); } catch { /* passive */ }
+				clearInterval(inventoryInterval);
+			};
+		} else {
+			try { stopPlayerTracking(true, "quest-engine"); } catch { /* passive */ }
+		}
+
+		return () => {
+			try { stopPlayerTracking(true, "quest-engine"); } catch { /* passive */ }
+		};
+	}, [autoAdvanceEnabled]);
 
 	const scrollPrev = () => {
 		const prevStep = Math.max(active - 1, -1);
@@ -434,11 +545,29 @@ const QuestPage: React.FC = () => {
 	};
 
 	const handleStepClick = (clickedIndex: number) => {
+		setActive(clickedIndex);
+		// Only scroll if auto-scroll is enabled
+		if (settings.autoScrollEnabled) {
+			// In expanded mode, useEffect doesn't scroll, so we do it directly
+			if (settings.isExpandedMode) {
+				setTimeout(() => {
+					const targetElement = document.getElementById(clickedIndex.toString());
+					targetElement?.scrollIntoView({ behavior: "smooth", block: "start" });
+				}, 100);
+			}
+			// In compact mode, the useEffect handles scrolling
+		}
 		updateCompletionState(clickedIndex);
 
 		// Activate GL overlays for the clicked step
 		if (isGlAvailable && questSteps?.[clickedIndex]) {
 			onStepActivated(questSteps[clickedIndex], clickedIndex);
+		}
+
+		// Activate quest engine for the clicked step
+		if (questSteps?.[clickedIndex]) {
+			questEngineRef.current?.activateStep(questSteps[clickedIndex]);
+			questEngineRef.current?.checkInventory();
 		}
 	};
 	// Adjust to how your folders are actually named on disk
@@ -481,6 +610,15 @@ const QuestPage: React.FC = () => {
 					s.textContent = style.textContent;
 					newWindow.document.head.appendChild(s);
 				});
+
+				// Transfer theme settings to pop-out window
+				const theme = document.documentElement.getAttribute("data-theme");
+				if (theme) {
+					newWindow.document.documentElement.setAttribute("data-theme", theme);
+				}
+				newWindow.document.body.style.backgroundColor = getComputedStyle(document.body).backgroundColor;
+				newWindow.document.body.style.margin = "0";
+				newWindow.document.body.style.padding = "8px";
 
 				const root = createRoot(container);
 				root.render(
@@ -642,7 +780,7 @@ const QuestPage: React.FC = () => {
 										isCompleted={completedSteps.has(index)}
 										images={matchedImages}
 										onImagePopOut={handlePopOut}
-										onStepClick={settings.isExpandedMode ? handleStepClick : undefined}
+										onStepClick={handleStepClick}
 										quest={questName}
 									/>
 								);

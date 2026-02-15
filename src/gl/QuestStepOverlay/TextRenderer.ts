@@ -58,7 +58,7 @@ type TextLine = TextSegment[];
 
 /**
  * Strip formatting markers that Canvas2D can't render, preserving color codes
- * Removes: bold, italic, underline, strikethrough, superscript, links, images
+ * Removes: bold, italic, underline, superscript, links, images
  * Keeps: color codes [#XXX]{text} and [r,g,b]{text}
  */
 function stripNonColorFormatting(text: string): string {
@@ -88,9 +88,6 @@ function stripNonColorFormatting(text: string): string {
 
     // Underline: __text__ -> text
     result = result.replace(/__(.+?)__/g, "$1");
-
-    // Strikethrough: ~~text~~ -> text
-    result = result.replace(/~~(.+?)~~/g, "$1");
 
     // Superscript: ^(text) -> text, ^word -> word
     result = result.replace(/\^\(([^)]+)\)/g, "$1");

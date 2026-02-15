@@ -19,6 +19,7 @@ import { useDisclosure } from "@mantine/hooks";
 import { useSettings } from "./../../Entrance/Entrance Components/SettingsContext";
 import FontSizeControls from "./Setting Components/FontSizeInput";
 import StepOverlayPositionEditor from "./Setting Components/StepOverlayPositionEditor";
+import InventoryCalibration from "./Setting Components/InventoryCalibration";
 import { getUIScaleInfo, onResolutionChange, type UIScaleInfo } from "../../gl/UIScaleManager";
 import { isGlInjectionAvailable } from "../../api/glInjection";
 
@@ -199,6 +200,41 @@ const Settings: React.FC = () => {
 					info="Shows a 2D compass HUD that glows toward quest objectives. Light resource usage."
 					textColor={hasTextColor ? settings.textColor : undefined}
 				/>
+
+				<GlFeatureSwitch
+					label={settings.inventoryTrackingEnabled ? "Inventory Tracking On" : "Inventory Tracking Off"}
+					checked={settings.inventoryTrackingEnabled}
+					onChange={(checked) => {
+						updateSetting("inventoryTrackingEnabled", checked);
+						(async () => {
+							try {
+								const { getOrCreateTooltipLearner } = require("../../integration");
+								const learner = await getOrCreateTooltipLearner();
+								if (learner) {
+									if (checked) {
+										learner.startPolling(500);
+										console.log('[Settings] Inventory tracking started');
+									} else {
+										learner.stopPolling();
+										console.log('[Settings] Inventory tracking stopped');
+									}
+								}
+							} catch (e) {
+								console.warn('[Settings] Could not start inventory tracking:', e);
+							}
+						})();
+					}}
+					info="Passively learns item names by detecting tooltips when hovering inventory items. Requires mouse calibration. Light resource usage."
+					textColor={hasTextColor ? settings.textColor : undefined}
+				/>
+
+				<GlFeatureSwitch
+					label={settings.autoAdvanceEnabled ? "Auto-Advance On" : "Auto-Advance Off"}
+					checked={settings.autoAdvanceEnabled}
+					onChange={(checked) => updateSetting("autoAdvanceEnabled", checked)}
+					info="Automatically advances to the next quest step when completion conditions are met (dialog, location, or items). Requires quest steps to have completion conditions defined."
+					textColor={hasTextColor ? settings.textColor : undefined}
+				/>
 			</Stack>
 
 			<Accordion mt="md">
@@ -348,6 +384,20 @@ const Settings: React.FC = () => {
 						/>
 					</AccordionPanel>
 				</Accordion.Item>
+
+				{/* Inventory Mouse Calibration — only available via alt1gl launcher */}
+				{isGlInjectionAvailable() && (
+					<Accordion.Item key="inventory-calibration" value="Inventory Calibration">
+						<AccordionControl
+							styles={{ control: { color: hasLabelColor ? settings.labelColor : "" } }}
+						>
+							Inventory Mouse Calibration
+						</AccordionControl>
+						<AccordionPanel>
+							<InventoryCalibration />
+						</AccordionPanel>
+					</Accordion.Item>
+				)}
 			</Accordion>
 		</div>
 	);

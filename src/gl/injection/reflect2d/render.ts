@@ -1,4 +1,4 @@
-import { UIRenderTextureCache } from "../controlpanel/gameuiview";
+import { UIRenderTextureCache } from "./UIRenderTextureCache";
 import { AtlasSnapshotFragment, AtlasTracker, RenderRect } from "./reflect2d";
 
 export function renderGameUITextureUsage(ctx: CanvasRenderingContext2D, atlas: AtlasTracker, texturecache: UIRenderTextureCache, elements: RenderRect[], startindex: number, endindex: number, showBorders: boolean, selectedSprite: AtlasSnapshotFragment) {

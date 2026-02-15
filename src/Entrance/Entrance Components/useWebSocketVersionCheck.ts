@@ -1,7 +1,7 @@
 // src/hooks/useWebSocketVersionCheck.ts
 import { useState, useEffect, useRef, useCallback } from "react";
 import { io, Socket } from "socket.io-client";
-import { getApiBase, isElectron } from "../../api/base";
+import { getApiBase } from "../../api/base";
 import {
 	setServerCollisionVersion,
 	invalidateCollisionFiles,
@@ -90,7 +90,7 @@ export const useWebSocketVersionCheck = (
 		if (!clientVersionRef.current) return;
 
 		try {
-			const isDev = isElectron || window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
+			const isDev = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
 			const apiUrl = isDev ? "http://127.0.0.1:42069/api" : getApiBase();
 			const response = await fetch(`${apiUrl}/version`, { cache: "no-cache" });
 			if (!response.ok) return;
@@ -157,7 +157,7 @@ export const useWebSocketVersionCheck = (
 				return;
 			}
 
-			const isDev = isElectron || window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
+			const isDev = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
 
 			const wsOrigin = isDev ? "http://127.0.0.1:42069" : window.location.origin;
 

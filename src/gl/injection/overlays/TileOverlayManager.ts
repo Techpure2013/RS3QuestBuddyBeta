@@ -1196,8 +1196,8 @@ function ensureMarkerStream(): void {
     }, async (renders) => {
         if (pendingMarkers.size === 0) return;
 
+        // Mark non-floor programs
         for (const render of renders) {
-            // Check if this is a floor program
             if (!knownProgs.has(render.program)) {
                 if (render.program.inputs.find(q => q.name === "aMaterialSettingsSlotXY3")) {
                     knownProgs.set(render.program, {});
@@ -1206,21 +1206,31 @@ function ensureMarkerStream(): void {
                     continue;
                 }
             }
+        }
 
-            // Get chunk from this render
+        // Collect visible chunk keys
+        const visibleChunks = new Set<string>();
+        for (const render of renders) {
+            if (render.program.skipmask & wrongProgramMask) continue;
             const chunkInfo = getChunkFromRender(render);
-            if (!chunkInfo) continue;
+            if (chunkInfo) {
+                visibleChunks.add(`${chunkInfo.chunkX},${chunkInfo.chunkZ}`);
+            }
+        }
 
-            const chunkKey = `${chunkInfo.chunkX},${chunkInfo.chunkZ}`;
-
-            // Check if any pending marker is waiting for this chunk
+        // Resolve pending markers using floor-aware selection
+        for (const chunkKey of visibleChunks) {
             const pending = pendingMarkers.get(chunkKey);
             if (pending) {
-                console.log(`[TileOverlay] Chunk ${chunkKey} visible, creating overlay`);
-                pendingMarkers.delete(chunkKey);
-
-                const overlayId = await createMarkerOverlay(pending.marker, render, chunkInfo.chunkX, chunkInfo.chunkZ);
-                pending.resolve(overlayId);
+                const [cx, cz] = chunkKey.split(",").map(Number);
+                const targetFloor = pending.marker.floor ?? 0;
+                const bestRender = findBestFloorRender(renders, cx, cz, targetFloor);
+                if (bestRender) {
+                    console.log(`[TileOverlay] Chunk ${chunkKey} visible, creating overlay (floor ${targetFloor})`);
+                    pendingMarkers.delete(chunkKey);
+                    const overlayId = await createMarkerOverlay(pending.marker, bestRender.render, bestRender.chunkX, bestRender.chunkZ);
+                    pending.resolve(overlayId);
+                }
             }
         }
     });
@@ -1263,16 +1273,19 @@ export async function addRectMarker(marker: RectMarker): Promise<patchrs.GlOverl
             skipProgramMask: wrongProgramMask
         });
 
+        // Mark non-floor programs
         for (const render of renders) {
-            if (render.program.inputs.find(q => q.name === "aMaterialSettingsSlotXY3")) {
-                const chunkInfo = getChunkFromRender(render);
-                if (chunkInfo && chunkInfo.chunkX === targetChunkX && chunkInfo.chunkZ === targetChunkZ) {
-                    console.log(`[TileOverlay] Found chunk immediately`);
-                    return await createMarkerOverlay(marker, render, chunkInfo.chunkX, chunkInfo.chunkZ);
-                }
-            } else {
+            if (!render.program.inputs.find(q => q.name === "aMaterialSettingsSlotXY3")) {
                 render.program.skipmask |= wrongProgramMask;
             }
+        }
+
+        // Find best floor render matching target floor
+        const targetFloor = marker.floor ?? 0;
+        const bestRender = findBestFloorRender(renders, targetChunkX, targetChunkZ, targetFloor);
+        if (bestRender) {
+            console.log(`[TileOverlay] Found chunk immediately (floor ${targetFloor})`);
+            return await createMarkerOverlay(marker, bestRender.render, bestRender.chunkX, bestRender.chunkZ);
         }
     } catch (e) {
         console.warn("[TileOverlay] Error checking immediate renders:", e);

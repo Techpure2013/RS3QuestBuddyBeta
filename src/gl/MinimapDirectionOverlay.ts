@@ -221,9 +221,10 @@ void main() {
  * Pattern: UI renders to FBO X, then another UI render samples FBO X's texture.
  */
 async function findMinimapRequirements(): Promise<MinimapInfo | null> {
+  let allRenders: any[] = [];
   try {
     // Record UI renders with texture data, skipping programs already marked as non-UI
-    const allRenders = await patchrs.native.recordRenderCalls({
+    allRenders = await patchrs.native.recordRenderCalls({
       features: ["textures", "uniforms"],
       skipProgramMask: NON_UI_PROGRAM_MASK,
     });
@@ -397,6 +398,10 @@ async function findMinimapRequirements(): Promise<MinimapInfo | null> {
   } catch (e) {
     console.error("[MinimapDirection] Error finding minimap:", e);
     return null;
+  } finally {
+    for (const r of allRenders) {
+      try { r.dispose?.(); } catch (_) {}
+    }
   }
 }
 

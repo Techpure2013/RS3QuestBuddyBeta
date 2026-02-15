@@ -398,28 +398,35 @@ async function findAnyFloorVAO(forceRefresh: boolean = false): Promise<number | 
 		// IMPORTANT: Don't use skipProgramMask when looking for floor program for the first time
 		// Otherwise if no floor renders were present during initialization, ALL programs get marked
 		// as "wrong" and will be skipped forever, returning 0 renders
-		const renders = await state.patchrs.native.recordRenderCalls({
-			maxframes: 1,
-			features,
-			...(state.knownFloorProgramId !== null ? { skipProgramMask: WRONG_PROG_MASK } : {}),
-		});
+		let renders: any[] = [];
+		try {
+			renders = await state.patchrs.native.recordRenderCalls({
+				maxframes: 1,
+				features,
+				...(state.knownFloorProgramId !== null ? { skipProgramMask: WRONG_PROG_MASK } : {}),
+			});
 
-		for (const render of renders) {
-			if (!render.program) continue;
+			for (const render of renders) {
+				if (!render.program) continue;
 
-			if (state.knownFloorProgramId === null) {
-				if (!render.program.inputs?.find((i: any) => i.name === "aMaterialSettingsSlotXY3")) {
-					// Don't mark programs as wrong until we've found a floor program
-					continue;
+				if (state.knownFloorProgramId === null) {
+					if (!render.program.inputs?.find((i: any) => i.name === "aMaterialSettingsSlotXY3")) {
+						// Don't mark programs as wrong until we've found a floor program
+						continue;
+					}
+					state.knownFloorProgramId = render.program.programId;
+					console.log(`[PathTube] Found floor program: ${state.knownFloorProgramId}`);
+				} else {
+					if (render.program.programId !== state.knownFloorProgramId) continue;
 				}
-				state.knownFloorProgramId = render.program.programId;
-				console.log(`[PathTube] Found floor program: ${state.knownFloorProgramId}`);
-			} else {
-				if (render.program.programId !== state.knownFloorProgramId) continue;
-			}
 
-			state.anchorVaoId = render.vertexObjectId;
-			return state.anchorVaoId;
+				state.anchorVaoId = render.vertexObjectId;
+				return state.anchorVaoId;
+			}
+		} finally {
+			for (const r of renders) {
+				try { r.dispose?.(); } catch (_) {}
+			}
 		}
 	} catch (e) {
 		console.error("[PathTube] Error finding floor VAO:", e);

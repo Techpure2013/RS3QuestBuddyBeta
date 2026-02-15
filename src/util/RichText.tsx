@@ -8,7 +8,6 @@ import React from "react";
  * - *italics*            → Italic text
  * - ***bold italics***   → Bold + Italic text
  * - __underline__        → Underlined text
- * - ~~strikethrough~~    → Strikethrough text
  * - ^superscript         → Superscript (single word)
  * - ^(super script)      → Superscript (multiple words)
  * - [#FFFFFF]{text}      → Colored text (hex)
@@ -19,7 +18,7 @@ import React from "react";
  * - {{img:url}}          → Image shorthand (48px)
  * - {{img:url|64}}       → Image shorthand with size
  *
- * Combinations work: __**bold underline**__ or ~~*italic strikethrough*~~
+ * Combinations work: __**bold underline**__ or __*italic underline*__
  */
 
 type TextNode =
@@ -28,7 +27,6 @@ type TextNode =
 	| { type: "italic"; children: TextNode[] }
 	| { type: "bolditalic"; children: TextNode[] }
 	| { type: "underline"; children: TextNode[] }
-	| { type: "strikethrough"; children: TextNode[] }
 	| { type: "superscript"; children: TextNode[] }
 	| { type: "color"; color: string; children: TextNode[] }
 	| { type: "link"; url: string; children: TextNode[] }
@@ -95,8 +93,6 @@ const patterns: Array<{
 	{ regex: /\*\*__(.+?)__\*\*/, type: "bold" },
 	// Underline: __text__ - use lazy match
 	{ regex: /__(.+?)__/, type: "underline" },
-	// Strikethrough: ~~text~~ - use lazy match
-	{ regex: /~~(.+?)~~/, type: "strikethrough" },
 	// Superscript with parentheses: ^(text with spaces)
 	{ regex: /\^\(([^)]+)\)/, type: "superscript" },
 	// Superscript single word: ^word
@@ -238,9 +234,6 @@ function renderNodes(
 
 			case "underline":
 				return <u key={key}>{renderNodes(node.children, key, options)}</u>;
-
-			case "strikethrough":
-				return <s key={key}>{renderNodes(node.children, key, options)}</s>;
 
 			case "superscript":
 				return (
@@ -433,9 +426,6 @@ export function stripFormatting(text: string): string {
 
 		// Underline: __text__ -> text
 		result = result.replace(/__(.+?)__/g, "$1");
-
-		// Strikethrough: ~~text~~ -> text
-		result = result.replace(/~~(.+?)~~/g, "$1");
 
 		// Superscript with parentheses: ^(text) -> text
 		result = result.replace(/\^\(([^)]+)\)/g, "$1");

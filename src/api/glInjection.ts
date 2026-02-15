@@ -2,7 +2,7 @@
  * GL Injection API - Wrapper for alt1gl native addon
  *
  * Provides high-level functions for initializing and managing
- * GL injection into the RuneScape client in Electron mode.
+ * GL injection into the RuneScape client.
  */
 
 // Import native module to check availability at module load time
@@ -88,6 +88,21 @@ export async function initGlInjection(): Promise<boolean> {
 			return false;
 		}
 
+		// Check if already connected (e.g., launcher preload already set up globalThis.alt1gl)
+		try {
+			if (patchrs.native.getRsReady()) {
+				console.log("[glInjection] Already connected to RS client (via launcher preload)");
+				injectionState = {
+					pid: 0, // PID not known from preload path
+					dllname: "preload",
+					details: { memoryid: 0, instanceid: 0 },
+				};
+				return true;
+			}
+		} catch (e) {
+			// getRsReady may throw if not connected yet - that's fine
+		}
+
 		// Find RS client processes
 		const pids = patchrs.native.debug.getExePids("rs2client.exe");
 		if (pids.length === 0) {
@@ -97,8 +112,68 @@ export async function initGlInjection(): Promise<boolean> {
 
 		console.log(`[glInjection] Found RS client PIDs: ${pids.join(", ")}`);
 
+		// Check if the launcher's overlay is already managing this RS client.
+		// The overlay DLL creates a marker file in %TEMP% when it initializes.
+		// If this file exists, re-injecting would cause GL hook conflicts and crash.
+		const targetPid = pids[0];
+		try {
+			const fs = require("fs");
+			const os = require("os");
+			const path = require("path");
+			const markerPath = path.join(os.tmpdir(), `alt1gl-active-${targetPid}`);
+			console.log(`[glInjection] Checking for injection marker: ${markerPath}`);
+			if (fs.existsSync(markerPath)) {
+				console.log(`[glInjection] Injection marker found for PID ${targetPid} - launcher overlay is already active`);
+
+				// Read the overlay DLL path from the marker file.
+				// The overlay writes its own DLL path so we can pass it to injectDll
+				// to connect to existing shared memory without loading a second DLL.
+				let overlayDllPath = "";
+				try {
+					overlayDllPath = fs.readFileSync(markerPath, "utf-8").trim();
+				} catch (e) {
+					console.log("[glInjection] Could not read DLL path from marker file:", e);
+				}
+
+				if (overlayDllPath && overlayDllPath.length > 0) {
+					console.log(`[glInjection] Overlay DLL path from marker: ${overlayDllPath}`);
+					console.log("[glInjection] Connecting to existing shared memory session...");
+
+					// Call injectDll directly with the overlay DLL path.
+					// Since this DLL is already loaded in the target process,
+					// LoadLibrary just increments the ref count and injectDll
+					// connects us to the existing shared memory.
+					try {
+						const res = patchrs.native.debug.injectDll(targetPid, overlayDllPath);
+						injectionState = {
+							pid: targetPid,
+							dllname: overlayDllPath,
+							details: res,
+						};
+
+						if (res) {
+							console.log(`[glInjection] Connected to launcher overlay session for PID ${targetPid}`);
+							console.log(`[glInjection] Memory ID: ${res.memoryid}, Instance ID: ${res.instanceid}`);
+							return true;
+						} else {
+							console.log("[glInjection] injectDll returned null - failed to connect");
+							return false;
+						}
+					} catch (error) {
+						console.error("[glInjection] Error connecting to launcher overlay session:", error);
+						return false;
+					}
+				} else {
+					console.log("[glInjection] Marker file empty (old format) - falling through to standard injection");
+				}
+			}
+			console.log("[glInjection] No injection marker found, proceeding with injection");
+		} catch (e) {
+			console.log("[glInjection] Marker check error:", e);
+		}
+
 		// Inject into first process (usually the main one)
-		const result = patchrs.injectClient(pids[0]);
+		const result = patchrs.injectClient(targetPid);
 		injectionState = result;
 
 		if (!result.details) {

@@ -45,6 +45,8 @@ export const DIALOG_IDS = {
   dialogbtnend: 9061,
   /** Accept Quest button background (quest start screen) */
   acceptQuestBg: 17817,
+  /** Continue button (click to continue dialog) */
+  continueBtn: 18635,
 };
 
 /** Set of all dialog sprite IDs for fast lookup (skip masking) */
@@ -54,6 +56,7 @@ const DIALOG_ID_SET = new Set([
   DIALOG_IDS.dialogbtnstart,
   DIALOG_IDS.dialogbtnend,
   DIALOG_IDS.acceptQuestBg,
+  DIALOG_IDS.continueBtn,
 ]);
 
 /** Default color for buttons when color data is unavailable */
@@ -641,9 +644,10 @@ export function detectDialogBox(
 
   for (let i = 0; i < newstate.elements.length; i++) {
     const el = newstate.elements[i];
-    // Check for regular dialog button OR accept quest button
+    // Check for regular dialog button, accept quest button, OR continue button
     if (el.sprite.known?.id === DIALOG_IDS.dialogboxbtnbg ||
-        el.sprite.known?.id === DIALOG_IDS.acceptQuestBg) {
+        el.sprite.known?.id === DIALOG_IDS.acceptQuestBg ||
+        el.sprite.known?.id === DIALOG_IDS.continueBtn) {
       bgSprites.push({
         x: el.x,
         y: el.y,
@@ -760,6 +764,32 @@ export function detectDialogBox(
           end: null,
           pressed: false, // Updated async via updatePressedStates
           bgColor,
+        });
+        continue;
+      }
+
+      // Try CONTINUE button pattern (sprite 18635 - click to continue dialog)
+      // This is just a sprite with no text - used to advance dialog
+      const continueMatch = parser.searchUIPattern([
+        { id: DIALOG_IDS.continueBtn, ref: "continueBtn" },
+      ]);
+
+      if (continueMatch) {
+        const continueEl = continueMatch.continueBtn.match;
+        const continueRect: ButtonRect = {
+          x: continueEl.x,
+          y: continueEl.y,
+          width: continueEl.width,
+          height: continueEl.height,
+        };
+
+        buttons.push({
+          text: "Click to continue",  // Fixed label - sprite has no text
+          start: null,
+          bg: continueRect,
+          end: null,
+          pressed: false, // Updated async via updatePressedStates
+          bgColor: (continueEl as any).color ?? DEFAULT_COLOR,
         });
         continue;
       }
