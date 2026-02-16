@@ -7,7 +7,7 @@ export const CHUNK_SIZE = 64;
 export const TILE_SIZE = 512;
 export const HEIGHT_SCALING = TILE_SIZE / 32;
 
-const HEIGHT_DATA_ENDPOINT = "https://runeapps.org/maps/mapheightrender/";
+const HEIGHT_DATA_ENDPOINT = "https://runeapps.org/s3/map4/live/";
 
 // Cache for loaded height data
 const heightCache = new Map<string, Uint16Array | null>();
@@ -43,7 +43,7 @@ export async function fetchHeightData(
     // Start new fetch
     const fetchPromise = (async (): Promise<Uint16Array | null> => {
         try {
-            const url = `${HEIGHT_DATA_ENDPOINT}height-${level}/${chunkX}-${chunkZ}.bin.gz`;
+            const url = `${HEIGHT_DATA_ENDPOINT}heightmesh-${level}/0/${chunkX}-${chunkZ}.bin.gz`;
 
             const res = await fetch(url);
             if (!res.ok) {
@@ -172,7 +172,7 @@ export async function fetchAllLevelsHeightData(
     chunkZ: number
 ): Promise<(Uint16Array | null)[]> {
     // Fetch all levels in parallel
-    const promises = [];
+    const promises: Promise<Uint16Array | null>[] = [];
     for (let level = 0; level < MAX_FLOOR_LEVELS; level++) {
         promises.push(fetchHeightData(chunkX, chunkZ, level));
     }
