@@ -1,0 +1,959 @@
+{
+  "sheetwidth": 606,
+  "sheetheight": 84,
+  "sheethash": 2136658951,
+  "spriteid": -1,
+  "characters": [
+    {
+      "chr": "\u0000",
+      "charcode": 0,
+      "x": 595,
+      "y": 56,
+      "width": 9,
+      "height": 10,
+      "hash": 1872480719,
+      "bearingy": 0
+    },
+    {
+      "chr": "a",
+      "charcode": 97,
+      "x": 264,
+      "y": 72,
+      "width": 8,
+      "height": 8,
+      "hash": 2245747257,
+      "bearingy": 0
+    },
+    {
+      "chr": "b",
+      "charcode": 98,
+      "x": 274,
+      "y": 72,
+      "width": 8,
+      "height": 11,
+      "hash": 457174399,
+      "bearingy": 0
+    },
+    {
+      "chr": "c",
+      "charcode": 99,
+      "x": 284,
+      "y": 72,
+      "width": 7,
+      "height": 8,
+      "hash": 3559068801,
+      "bearingy": 0
+    },
+    {
+      "chr": "d",
+      "charcode": 100,
+      "x": 293,
+      "y": 72,
+      "width": 8,
+      "height": 11,
+      "hash": 338891383,
+      "bearingy": 0
+    },
+    {
+      "chr": "e",
+      "charcode": 101,
+      "x": 303,
+      "y": 72,
+      "width": 8,
+      "height": 8,
+      "hash": 192954487,
+      "bearingy": 0
+    },
+    {
+      "chr": "f",
+      "charcode": 102,
+      "x": 313,
+      "y": 72,
+      "width": 6,
+      "height": 11,
+      "hash": 861527063,
+      "bearingy": 0
+    },
+    {
+      "chr": "g",
+      "charcode": 103,
+      "x": 321,
+      "y": 72,
+      "width": 8,
+      "height": 12,
+      "hash": 3385909647,
+      "bearingy": 0
+    },
+    {
+      "chr": "h",
+      "charcode": 104,
+      "x": 331,
+      "y": 72,
+      "width": 8,
+      "height": 11,
+      "hash": 3934943092,
+      "bearingy": 0
+    },
+    {
+      "chr": "i",
+      "charcode": 105,
+      "x": 341,
+      "y": 72,
+      "width": 3,
+      "height": 10,
+      "hash": 2367987689,
+      "bearingy": 0
+    },
+    {
+      "chr": "k",
+      "charcode": 107,
+      "x": 353,
+      "y": 72,
+      "width": 7,
+      "height": 11,
+      "hash": 3413735404,
+      "bearingy": 0
+    },
+    {
+      "chr": "l",
+      "charcode": 108,
+      "x": 362,
+      "y": 72,
+      "width": 3,
+      "height": 11,
+      "hash": 61370358,
+      "bearingy": 0
+    },
+    {
+      "chr": "m",
+      "charcode": 109,
+      "x": 367,
+      "y": 72,
+      "width": 13,
+      "height": 8,
+      "hash": 281414048,
+      "bearingy": 0
+    },
+    {
+      "chr": "n",
+      "charcode": 110,
+      "x": 382,
+      "y": 72,
+      "width": 8,
+      "height": 8,
+      "hash": 4081736134,
+      "bearingy": 0
+    },
+    {
+      "chr": "o",
+      "charcode": 111,
+      "x": 392,
+      "y": 72,
+      "width": 9,
+      "height": 8,
+      "hash": 3140535945,
+      "bearingy": 0
+    },
+    {
+      "chr": "p",
+      "charcode": 112,
+      "x": 403,
+      "y": 72,
+      "width": 8,
+      "height": 12,
+      "hash": 4195361440,
+      "bearingy": 0
+    },
+    {
+      "chr": "r",
+      "charcode": 114,
+      "x": 423,
+      "y": 72,
+      "width": 6,
+      "height": 8,
+      "hash": 2324380878,
+      "bearingy": 0
+    },
+    {
+      "chr": "s",
+      "charcode": 115,
+      "x": 431,
+      "y": 72,
+      "width": 7,
+      "height": 8,
+      "hash": 2412738784,
+      "bearingy": 0
+    },
+    {
+      "chr": "t",
+      "charcode": 116,
+      "x": 440,
+      "y": 72,
+      "width": 6,
+      "height": 10,
+      "hash": 3064625377,
+      "bearingy": 0
+    },
+    {
+      "chr": "u",
+      "charcode": 117,
+      "x": 448,
+      "y": 72,
+      "width": 8,
+      "height": 8,
+      "hash": 10495367,
+      "bearingy": 0
+    },
+    {
+      "chr": "v",
+      "charcode": 118,
+      "x": 458,
+      "y": 72,
+      "width": 8,
+      "height": 8,
+      "hash": 1069026142,
+      "bearingy": 0
+    },
+    {
+      "chr": "w",
+      "charcode": 119,
+      "x": 468,
+      "y": 72,
+      "width": 11,
+      "height": 8,
+      "hash": 2936386991,
+      "bearingy": 0
+    },
+    {
+      "chr": "x",
+      "charcode": 120,
+      "x": 481,
+      "y": 72,
+      "width": 8,
+      "height": 8,
+      "hash": 786015157,
+      "bearingy": 0
+    },
+    {
+      "chr": "y",
+      "charcode": 121,
+      "x": 491,
+      "y": 72,
+      "width": 8,
+      "height": 12,
+      "hash": 874828116,
+      "bearingy": 0
+    },
+    {
+      "chr": "z",
+      "charcode": 122,
+      "x": 501,
+      "y": 72,
+      "width": 6,
+      "height": 8,
+      "hash": 1701928438,
+      "bearingy": 0
+    },
+    {
+      "chr": "A",
+      "charcode": 65,
+      "x": 336,
+      "y": 56,
+      "width": 9,
+      "height": 10,
+      "hash": 4009931905,
+      "bearingy": 0
+    },
+    {
+      "chr": "B",
+      "charcode": 66,
+      "x": 347,
+      "y": 56,
+      "width": 9,
+      "height": 10,
+      "hash": 2090476746,
+      "bearingy": 0
+    },
+    {
+      "chr": "C",
+      "charcode": 67,
+      "x": 358,
+      "y": 56,
+      "width": 9,
+      "height": 10,
+      "hash": 3137645545,
+      "bearingy": 0
+    },
+    {
+      "chr": "E",
+      "charcode": 69,
+      "x": 381,
+      "y": 56,
+      "width": 7,
+      "height": 10,
+      "hash": 2446942446,
+      "bearingy": 0
+    },
+    {
+      "chr": "F",
+      "charcode": 70,
+      "x": 390,
+      "y": 56,
+      "width": 7,
+      "height": 10,
+      "hash": 2230828858,
+      "bearingy": 0
+    },
+    {
+      "chr": "G",
+      "charcode": 71,
+      "x": 399,
+      "y": 56,
+      "width": 10,
+      "height": 10,
+      "hash": 3478904935,
+      "bearingy": 0
+    },
+    {
+      "chr": "H",
+      "charcode": 72,
+      "x": 411,
+      "y": 56,
+      "width": 9,
+      "height": 10,
+      "hash": 2792278628,
+      "bearingy": 0
+    },
+    {
+      "chr": "I",
+      "charcode": 73,
+      "x": 422,
+      "y": 56,
+      "width": 5,
+      "height": 10,
+      "hash": 1386152701,
+      "bearingy": 0
+    },
+    {
+      "chr": "J",
+      "charcode": 74,
+      "x": 429,
+      "y": 56,
+      "width": 5,
+      "height": 14,
+      "hash": 3344173106,
+      "bearingy": 0
+    },
+    {
+      "chr": "M",
+      "charcode": 77,
+      "x": 456,
+      "y": 56,
+      "width": 12,
+      "height": 10,
+      "hash": 1020215046,
+      "bearingy": 0
+    },
+    {
+      "chr": "N",
+      "charcode": 78,
+      "x": 470,
+      "y": 56,
+      "width": 10,
+      "height": 10,
+      "hash": 3769726910,
+      "bearingy": 0
+    },
+    {
+      "chr": "P",
+      "charcode": 80,
+      "x": 495,
+      "y": 56,
+      "width": 8,
+      "height": 10,
+      "hash": 3858422278,
+      "bearingy": 0
+    },
+    {
+      "chr": "R",
+      "charcode": 82,
+      "x": 518,
+      "y": 56,
+      "width": 8,
+      "height": 10,
+      "hash": 3352885678,
+      "bearingy": 0
+    },
+    {
+      "chr": "S",
+      "charcode": 83,
+      "x": 528,
+      "y": 56,
+      "width": 8,
+      "height": 10,
+      "hash": 3759695752,
+      "bearingy": 0
+    },
+    {
+      "chr": "W",
+      "charcode": 87,
+      "x": 569,
+      "y": 56,
+      "width": 13,
+      "height": 10,
+      "hash": 3864472817,
+      "bearingy": 0
+    },
+    {
+      "chr": "X",
+      "charcode": 88,
+      "x": 584,
+      "y": 56,
+      "width": 9,
+      "height": 10,
+      "hash": 854587405,
+      "bearingy": 0
+    },
+    {
+      "chr": "Y",
+      "charcode": 89,
+      "x": 595,
+      "y": 56,
+      "width": 9,
+      "height": 10,
+      "hash": 1872480719,
+      "bearingy": 0
+    },
+    {
+      "chr": "Z",
+      "charcode": 90,
+      "x": 211,
+      "y": 72,
+      "width": 7,
+      "height": 10,
+      "hash": 2137239333,
+      "bearingy": 0
+    },
+    {
+      "chr": "0",
+      "charcode": 48,
+      "x": 582,
+      "y": 36,
+      "width": 8,
+      "height": 10,
+      "hash": 735150090,
+      "bearingy": 0
+    },
+    {
+      "chr": "1",
+      "charcode": 49,
+      "x": 592,
+      "y": 36,
+      "width": 5,
+      "height": 10,
+      "hash": 2746835084,
+      "bearingy": 0
+    },
+    {
+      "chr": "2",
+      "charcode": 50,
+      "x": 599,
+      "y": 36,
+      "width": 7,
+      "height": 10,
+      "hash": 3530884216,
+      "bearingy": 0
+    },
+    {
+      "chr": "3",
+      "charcode": 51,
+      "x": 211,
+      "y": 56,
+      "width": 7,
+      "height": 10,
+      "hash": 4078912764,
+      "bearingy": 0
+    },
+    {
+      "chr": "8",
+      "charcode": 56,
+      "x": 257,
+      "y": 56,
+      "width": 8,
+      "height": 10,
+      "hash": 3707126536,
+      "bearingy": 0
+    },
+    {
+      "chr": "9",
+      "charcode": 57,
+      "x": 267,
+      "y": 56,
+      "width": 8,
+      "height": 10,
+      "hash": 3038529736,
+      "bearingy": 0
+    },
+    {
+      "chr": "!",
+      "charcode": 33,
+      "x": 464,
+      "y": 36,
+      "width": 3,
+      "height": 10,
+      "hash": 2149094496,
+      "bearingy": 0
+    },
+    {
+      "chr": "'",
+      "charcode": 39,
+      "x": 524,
+      "y": 36,
+      "width": 3,
+      "height": 7,
+      "hash": 2226136069,
+      "bearingy": 0
+    },
+    {
+      "chr": ",",
+      "charcode": 44,
+      "x": 560,
+      "y": 36,
+      "width": 3,
+      "height": 4,
+      "hash": 3231160608,
+      "bearingy": 0
+    },
+    {
+      "chr": ".",
+      "charcode": 46,
+      "x": 570,
+      "y": 36,
+      "width": 2,
+      "height": 2,
+      "hash": 2378732829,
+      "bearingy": 0
+    },
+    {
+      "chr": ":",
+      "charcode": 58,
+      "x": 277,
+      "y": 56,
+      "width": 2,
+      "height": 10,
+      "hash": 3529050811,
+      "bearingy": 0
+    },
+    {
+      "chr": "j",
+      "charcode": 106,
+      "x": 126,
+      "y": 36,
+      "width": 5,
+      "height": 14,
+      "hash": 3775234993,
+      "bearingy": 0
+    },
+    {
+      "chr": "D",
+      "charcode": 68,
+      "x": 149,
+      "y": 20,
+      "width": 10,
+      "height": 10,
+      "hash": 788811861,
+      "bearingy": 0
+    },
+    {
+      "chr": "K",
+      "charcode": 75,
+      "x": 216,
+      "y": 20,
+      "width": 9,
+      "height": 10,
+      "hash": 3205000747,
+      "bearingy": 0
+    },
+    {
+      "chr": "O",
+      "charcode": 79,
+      "x": 262,
+      "y": 20,
+      "width": 11,
+      "height": 10,
+      "hash": 4205712702,
+      "bearingy": 0
+    },
+    {
+      "chr": "Q",
+      "charcode": 81,
+      "x": 285,
+      "y": 20,
+      "width": 11,
+      "height": 13,
+      "hash": 1405122293,
+      "bearingy": 0
+    },
+    {
+      "chr": "T",
+      "charcode": 84,
+      "x": 318,
+      "y": 20,
+      "width": 7,
+      "height": 10,
+      "hash": 1200937415,
+      "bearingy": 0
+    },
+    {
+      "chr": "U",
+      "charcode": 85,
+      "x": 327,
+      "y": 20,
+      "width": 9,
+      "height": 10,
+      "hash": 3062189204,
+      "bearingy": 0
+    },
+    {
+      "chr": "V",
+      "charcode": 86,
+      "x": 338,
+      "y": 20,
+      "width": 9,
+      "height": 10,
+      "hash": 2882529807,
+      "bearingy": 0
+    },
+    {
+      "chr": "4",
+      "charcode": 52,
+      "x": 0,
+      "y": 20,
+      "width": 7,
+      "height": 10,
+      "hash": 1302809132,
+      "bearingy": 0
+    },
+    {
+      "chr": "6",
+      "charcode": 54,
+      "x": 19,
+      "y": 20,
+      "width": 8,
+      "height": 10,
+      "hash": 2212419825,
+      "bearingy": 0
+    },
+    {
+      "chr": "\"",
+      "charcode": 34,
+      "x": 249,
+      "y": 0,
+      "width": 5,
+      "height": 7,
+      "hash": 4266807199,
+      "bearingy": 0
+    },
+    {
+      "chr": "#",
+      "charcode": 35,
+      "x": 256,
+      "y": 0,
+      "width": 9,
+      "height": 10,
+      "hash": 1178447996,
+      "bearingy": 0
+    },
+    {
+      "chr": "$",
+      "charcode": 36,
+      "x": 267,
+      "y": 0,
+      "width": 8,
+      "height": 12,
+      "hash": 3224853875,
+      "bearingy": 0
+    },
+    {
+      "chr": "%",
+      "charcode": 37,
+      "x": 277,
+      "y": 0,
+      "width": 12,
+      "height": 10,
+      "hash": 2190907980,
+      "bearingy": 0
+    },
+    {
+      "chr": "&",
+      "charcode": 38,
+      "x": 291,
+      "y": 0,
+      "width": 11,
+      "height": 10,
+      "hash": 1995808114,
+      "bearingy": 0
+    },
+    {
+      "chr": "(",
+      "charcode": 40,
+      "x": 309,
+      "y": 0,
+      "width": 5,
+      "height": 18,
+      "hash": 1937635856,
+      "bearingy": 0
+    },
+    {
+      "chr": ")",
+      "charcode": 41,
+      "x": 316,
+      "y": 0,
+      "width": 5,
+      "height": 18,
+      "hash": 1473088750,
+      "bearingy": 0
+    },
+    {
+      "chr": "*",
+      "charcode": 42,
+      "x": 323,
+      "y": 0,
+      "width": 7,
+      "height": 10,
+      "hash": 1129668175,
+      "bearingy": 0
+    },
+    {
+      "chr": "+",
+      "charcode": 43,
+      "x": 332,
+      "y": 0,
+      "width": 6,
+      "height": 9,
+      "hash": 422499668,
+      "bearingy": 0
+    },
+    {
+      "chr": "-",
+      "charcode": 45,
+      "x": 345,
+      "y": 0,
+      "width": 3,
+      "height": 7,
+      "hash": 1570761168,
+      "bearingy": 0
+    },
+    {
+      "chr": "/",
+      "charcode": 47,
+      "x": 354,
+      "y": 0,
+      "width": 6,
+      "height": 18,
+      "hash": 2656167575,
+      "bearingy": 0
+    },
+    {
+      "chr": ";",
+      "charcode": 59,
+      "x": 61,
+      "y": 20,
+      "width": 3,
+      "height": 12,
+      "hash": 3738596482,
+      "bearingy": 0
+    },
+    {
+      "chr": "<",
+      "charcode": 60,
+      "x": 66,
+      "y": 20,
+      "width": 7,
+      "height": 9,
+      "hash": 1708277934,
+      "bearingy": 0
+    },
+    {
+      "chr": "=",
+      "charcode": 61,
+      "x": 75,
+      "y": 20,
+      "width": 6,
+      "height": 8,
+      "hash": 3922345351,
+      "bearingy": 0
+    },
+    {
+      "chr": ">",
+      "charcode": 62,
+      "x": 83,
+      "y": 20,
+      "width": 7,
+      "height": 9,
+      "hash": 2782944924,
+      "bearingy": 0
+    },
+    {
+      "chr": "?",
+      "charcode": 63,
+      "x": 92,
+      "y": 20,
+      "width": 7,
+      "height": 10,
+      "hash": 2264022948,
+      "bearingy": 0
+    },
+    {
+      "chr": "@",
+      "charcode": 64,
+      "x": 101,
+      "y": 20,
+      "width": 13,
+      "height": 12,
+      "hash": 2924020050,
+      "bearingy": 0
+    },
+    {
+      "chr": "[",
+      "charcode": 91,
+      "x": 0,
+      "y": 36,
+      "width": 4,
+      "height": 18,
+      "hash": 212823663,
+      "bearingy": 0
+    },
+    {
+      "chr": "\\",
+      "charcode": 92,
+      "x": 6,
+      "y": 36,
+      "width": 6,
+      "height": 18,
+      "hash": 1149614869,
+      "bearingy": 0
+    },
+    {
+      "chr": "]",
+      "charcode": 93,
+      "x": 14,
+      "y": 36,
+      "width": 4,
+      "height": 18,
+      "hash": 107752210,
+      "bearingy": 0
+    },
+    {
+      "chr": "^",
+      "charcode": 94,
+      "x": 20,
+      "y": 36,
+      "width": 8,
+      "height": 7,
+      "hash": 1584571765,
+      "bearingy": 0
+    },
+    {
+      "chr": "_",
+      "charcode": 95,
+      "x": 30,
+      "y": 36,
+      "width": 6,
+      "height": 2,
+      "hash": 123608552,
+      "bearingy": 0
+    },
+    {
+      "chr": "`",
+      "charcode": 96,
+      "x": 38,
+      "y": 36,
+      "width": 4,
+      "height": 3,
+      "hash": 195304090,
+      "bearingy": 0
+    },
+    {
+      "chr": "{",
+      "charcode": 123,
+      "x": 289,
+      "y": 36,
+      "width": 5,
+      "height": 18,
+      "hash": 1442415492,
+      "bearingy": 0
+    },
+    {
+      "chr": "|",
+      "charcode": 124,
+      "x": 296,
+      "y": 36,
+      "width": 3,
+      "height": 18,
+      "hash": 2188717127,
+      "bearingy": 0
+    },
+    {
+      "chr": "}",
+      "charcode": 125,
+      "x": 301,
+      "y": 36,
+      "width": 5,
+      "height": 18,
+      "hash": 3829583044,
+      "bearingy": 0
+    },
+    {
+      "chr": "~",
+      "charcode": 126,
+      "x": 308,
+      "y": 36,
+      "width": 6,
+      "height": 7,
+      "hash": 1612100744,
+      "bearingy": 0
+    },
+    {
+      "chr": "q",
+      "charcode": 113,
+      "x": 202,
+      "y": 16,
+      "width": 8,
+      "height": 12,
+      "hash": 4142035726,
+      "bearingy": 0
+    },
+    {
+      "chr": "L",
+      "charcode": 76,
+      "x": 236,
+      "y": 0,
+      "width": 7,
+      "height": 10,
+      "hash": 3801556649,
+      "bearingy": 0
+    },
+    {
+      "chr": "5",
+      "charcode": 53,
+      "x": 18,
+      "y": 0,
+      "width": 8,
+      "height": 10,
+      "hash": 3443248546,
+      "bearingy": 0
+    },
+    {
+      "chr": "7",
+      "charcode": 55,
+      "x": 38,
+      "y": 0,
+      "width": 6,
+      "height": 10,
+      "hash": 3730981815,
+      "bearingy": 0
+    }
+  ],
+  "unknownchars": []
+}

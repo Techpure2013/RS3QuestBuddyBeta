@@ -11,7 +11,6 @@ drizzle.config.ts
 dev-images/
 
 # local db data if you bind-mount
-data/
 pg_data/
 postgres-data/
 

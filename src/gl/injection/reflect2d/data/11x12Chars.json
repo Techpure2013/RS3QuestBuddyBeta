@@ -1,0 +1,199 @@
+{
+  "sheetwidth": 378,
+  "sheetheight": 49,
+  "sheethash": 1523958951,
+  "spriteid": -1,
+  "characters": [
+    {
+      "chr": "\u0000",
+      "charcode": 0,
+      "x": 54,
+      "y": 38,
+      "width": 10,
+      "height": 11,
+      "hash": 4011142257,
+      "bearingy": 0
+    },
+    {
+      "chr": "a",
+      "charcode": 97,
+      "x": 2,
+      "y": 38,
+      "width": 12,
+      "height": 11,
+      "hash": 2183593441,
+      "bearingy": 0
+    },
+    {
+      "chr": "b",
+      "charcode": 98,
+      "x": 16,
+      "y": 38,
+      "width": 10,
+      "height": 10,
+      "hash": 865694918,
+      "bearingy": 0
+    },
+    {
+      "chr": "d",
+      "charcode": 100,
+      "x": 40,
+      "y": 38,
+      "width": 12,
+      "height": 10,
+      "hash": 2198962699,
+      "bearingy": 0
+    },
+    {
+      "chr": "e",
+      "charcode": 101,
+      "x": 54,
+      "y": 38,
+      "width": 10,
+      "height": 11,
+      "hash": 4011142257,
+      "bearingy": 0
+    },
+    {
+      "chr": "g",
+      "charcode": 103,
+      "x": 77,
+      "y": 38,
+      "width": 11,
+      "height": 10,
+      "hash": 2866584692,
+      "bearingy": 0
+    },
+    {
+      "chr": "h",
+      "charcode": 104,
+      "x": 90,
+      "y": 38,
+      "width": 13,
+      "height": 10,
+      "hash": 3919189004,
+      "bearingy": 0
+    },
+    {
+      "chr": "i",
+      "charcode": 105,
+      "x": 105,
+      "y": 38,
+      "width": 6,
+      "height": 10,
+      "hash": 804196487,
+      "bearingy": 0
+    },
+    {
+      "chr": "m",
+      "charcode": 109,
+      "x": 147,
+      "y": 38,
+      "width": 15,
+      "height": 10,
+      "hash": 1346174559,
+      "bearingy": 0
+    },
+    {
+      "chr": "n",
+      "charcode": 110,
+      "x": 164,
+      "y": 38,
+      "width": 13,
+      "height": 10,
+      "hash": 3221027758,
+      "bearingy": 0
+    },
+    {
+      "chr": "o",
+      "charcode": 111,
+      "x": 179,
+      "y": 38,
+      "width": 12,
+      "height": 10,
+      "hash": 184135844,
+      "bearingy": 0
+    },
+    {
+      "chr": "r",
+      "charcode": 114,
+      "x": 225,
+      "y": 38,
+      "width": 12,
+      "height": 10,
+      "hash": 2375669221,
+      "bearingy": 0
+    },
+    {
+      "chr": "s",
+      "charcode": 115,
+      "x": 239,
+      "y": 38,
+      "width": 8,
+      "height": 10,
+      "hash": 2470411880,
+      "bearingy": 0
+    },
+    {
+      "chr": "t",
+      "charcode": 116,
+      "x": 249,
+      "y": 38,
+      "width": 10,
+      "height": 11,
+      "hash": 3833490830,
+      "bearingy": 0
+    },
+    {
+      "chr": "C",
+      "charcode": 67,
+      "x": 7,
+      "y": 18,
+      "width": 11,
+      "height": 12,
+      "hash": 3306168576,
+      "bearingy": 0
+    },
+    {
+      "chr": "H",
+      "charcode": 72,
+      "x": 73,
+      "y": 18,
+      "width": 14,
+      "height": 12,
+      "hash": 999667066,
+      "bearingy": 0
+    },
+    {
+      "chr": "M",
+      "charcode": 77,
+      "x": 132,
+      "y": 18,
+      "width": 17,
+      "height": 12,
+      "hash": 223863671,
+      "bearingy": 0
+    },
+    {
+      "chr": "P",
+      "charcode": 80,
+      "x": 182,
+      "y": 18,
+      "width": 10,
+      "height": 12,
+      "hash": 1400801259,
+      "bearingy": 0
+    },
+    {
+      "chr": "X",
+      "charcode": 88,
+      "x": 307,
+      "y": 18,
+      "width": 14,
+      "height": 12,
+      "hash": 2264961791,
+      "bearingy": 0
+    }
+  ],
+  "unknownchars": []
+}

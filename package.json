@@ -8,6 +8,7 @@
 		"start": "webpack-dev-server"
 	},
 	"dependencies": {
+		"@mantine/carousel": "^8.1.2",
 		"@mantine/core": "8.1.2",
 		"@tabler/icons-react": "3.33.0",
 		"@tippyjs/react": "^4.2.6",
