@@ -3097,16 +3097,8 @@ if (typeof window !== "undefined") {
         const floor = pos.floor;
         console.log(`Testing path overlay at (${x}, ${y}) floor ${floor}`);
 
-        const { drawPathTubes } = await import("../gl/PathTubeOverlay");
-        // Draw a simple 5-tile path
-        const path = [
-          { lat: y, lng: x, floor },
-          { lat: y + 2, lng: x, floor },
-          { lat: y + 4, lng: x, floor },
-          { lat: y + 4, lng: x + 2, floor },
-          { lat: y + 4, lng: x + 4, floor },
-        ];
-        return await drawPathTubes(path);
+        // PathTubeOverlay disabled
+        return false;
       } catch (e) {
         console.error("Failed to test path overlay:", e);
         return false;
@@ -3116,9 +3108,7 @@ if (typeof window !== "undefined") {
     // Clear path overlay
     clearPathOverlay: async () => {
       try {
-        const { clearPathTubes } = await import("../gl/PathTubeOverlay");
-        await clearPathTubes();
-        console.log("Path overlay cleared");
+        // PathTubeOverlay disabled
       } catch (e) {
         console.error("Failed to clear path overlay:", e);
       }

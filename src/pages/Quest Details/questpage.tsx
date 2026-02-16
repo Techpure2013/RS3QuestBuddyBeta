@@ -82,16 +82,11 @@ const QuestPage: React.FC = () => {
 		onStepComplete: () => scrollNextRef.current?.(),
 	});
 
-	// GL integration - handles dialog detection, pathfinding, NPC overlays
+	// GL integration - handles dialog detection, NPC overlays
 	const { onStepActivated, onStepDeactivated, isGlAvailable, isGlReady } = useGlQuestIntegration({
-		pathfindingEnabled: settings.pathfindingEnabled,
 		dialogSolverEnabled: settings.dialogSolverEnabled,
 		compassOverlayEnabled: settings.compassOverlayEnabled,
-		minimapArrowEnabled: settings.minimapArrowEnabled,
-		minimapMarkerEnabled: settings.minimapMarkerEnabled,
-		hudCompassEnabled: settings.hudCompassEnabled,
-		hudCompassX: settings.hudCompassX,
-		hudCompassY: settings.hudCompassY,
+		wanderRadiusEnabled: settings.wanderRadiusEnabled,
 		onDialogCompleted: () => {
 			markDialogCompleted();
 			questEngineRef.current?.markDialogCompleted();
@@ -424,13 +419,20 @@ const QuestPage: React.FC = () => {
 				);
 			} catch { /* passive - tracking not available */ }
 
-			const inventoryInterval = setInterval(() => {
-				try { questEngineRef.current?.checkInventory(); } catch { /* passive */ }
-			}, 2000);
+			// Only run inventory tracking when the active step requires items
+			const currentStep = questSteps[active];
+			const hasItemConditions = currentStep?.completionConditions?.items && currentStep.completionConditions.items.length > 0;
+
+			let inventoryInterval: ReturnType<typeof setInterval> | null = null;
+			if (hasItemConditions) {
+				inventoryInterval = setInterval(() => {
+					try { questEngineRef.current?.checkInventory(); } catch { /* passive */ }
+				}, 2000);
+			}
 
 			return () => {
 				try { stopPlayerTracking(true, "quest-engine"); } catch { /* passive */ }
-				clearInterval(inventoryInterval);
+				if (inventoryInterval) clearInterval(inventoryInterval);
 			};
 		} else {
 			try { stopPlayerTracking(true, "quest-engine"); } catch { /* passive */ }
@@ -439,7 +441,7 @@ const QuestPage: React.FC = () => {
 		return () => {
 			try { stopPlayerTracking(true, "quest-engine"); } catch { /* passive */ }
 		};
-	}, [autoAdvanceEnabled]);
+	}, [autoAdvanceEnabled, active, questSteps]);
 
 	const scrollPrev = () => {
 		const prevStep = Math.max(active - 1, -1);

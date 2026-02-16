@@ -162,10 +162,10 @@ const Settings: React.FC = () => {
 				/>
 
 				<GlFeatureSwitch
-					label={settings.pathfindingEnabled ? "Pathfinding On" : "Pathfinding Off"}
-					checked={settings.pathfindingEnabled}
-					onChange={(checked) => updateSetting("pathfindingEnabled", checked)}
-					info="Draws a path to quest objectives. Light resource usage. Note: Cannot navigate stairs or ladders efficiently."
+					label={settings.wanderRadiusEnabled ? "NPC Wander Radius On" : "NPC Wander Radius Off"}
+					checked={settings.wanderRadiusEnabled}
+					onChange={(checked) => updateSetting("wanderRadiusEnabled", checked)}
+					info="Shows a shaded area around quest NPCs indicating their wander range. Light resource usage."
 					textColor={hasTextColor ? settings.textColor : undefined}
 				/>
 
@@ -174,30 +174,6 @@ const Settings: React.FC = () => {
 					checked={settings.stepOverlayEnabled}
 					onChange={(checked) => updateSetting("stepOverlayEnabled", checked)}
 					info="Displays current quest step text on the game screen. Light resource usage."
-					textColor={hasTextColor ? settings.textColor : undefined}
-				/>
-
-				<GlFeatureSwitch
-					label={settings.minimapMarkerEnabled ? "Minimap Marker On" : "Minimap Marker Off"}
-					checked={settings.minimapMarkerEnabled}
-					onChange={(checked) => updateSetting("minimapMarkerEnabled", checked)}
-					info="Shows a marker on the minimap pointing to quest objectives. Light resource usage."
-					textColor={hasTextColor ? settings.textColor : undefined}
-				/>
-
-				<GlFeatureSwitch
-					label={settings.minimapArrowEnabled ? "Minimap Arrow On" : "Minimap Arrow Off"}
-					checked={settings.minimapArrowEnabled}
-					onChange={(checked) => updateSetting("minimapArrowEnabled", checked)}
-					info="Shows a directional arrow on the minimap pointing toward quest objectives. Light resource usage."
-					textColor={hasTextColor ? settings.textColor : undefined}
-				/>
-
-				<GlFeatureSwitch
-					label={settings.hudCompassEnabled ? "HUD Compass On" : "HUD Compass Off"}
-					checked={settings.hudCompassEnabled}
-					onChange={(checked) => updateSetting("hudCompassEnabled", checked)}
-					info="Shows a 2D compass HUD that glows toward quest objectives. Light resource usage."
 					textColor={hasTextColor ? settings.textColor : undefined}
 				/>
 
@@ -360,28 +336,6 @@ const Settings: React.FC = () => {
 								screenHeight={uiResolution.height}
 							/>
 						</Stack>
-					</AccordionPanel>
-				</Accordion.Item>
-
-				<Accordion.Item key="hud-compass-position" value="HUD Compass Position">
-					<AccordionControl
-						styles={{ control: { color: hasLabelColor ? settings.labelColor : "" } }}
-					>
-						HUD Compass Position
-					</AccordionControl>
-					<AccordionPanel>
-						<StepOverlayPositionEditor
-							positionX={settings.hudCompassX}
-							positionY={settings.hudCompassY}
-							onPositionChange={(x, y) => {
-								updateSetting("hudCompassX", x);
-								updateSetting("hudCompassY", y);
-							}}
-							screenWidth={uiResolution.width}
-							screenHeight={uiResolution.height}
-							overlayWidth={100}
-							overlayHeight={100}
-						/>
 					</AccordionPanel>
 				</Accordion.Item>
 

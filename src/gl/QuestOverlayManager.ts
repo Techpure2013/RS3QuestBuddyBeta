@@ -14,8 +14,6 @@ import type { GlOverlay } from "@injection/util/patchrs_napi";
 import { drawNpcCompassRoseAtLocation, drawNpcCompassRoseAttached, drawNpcCompassRoseOnFloor, clearAllCompassRoses, invalidateCompassAnchorVao } from "./CompassRoseOverlay";
 import { initUIScaleManager, onResolutionChange, type UIScaleInfo } from "./UIScaleManager";
 import { getPlayerPosition } from "./PlayerPositionTracker";
-import { MinimapDirectionOverlay, initMinimapDirectionOverlay } from "./MinimapDirectionOverlay";
-import { HudCompassOverlay, initHudCompassOverlay } from "./HudCompassOverlay";
 
 // Import types
 // NPC arrows use GlOverlay directly (from patchrs), while wander-radius and object-tile
@@ -50,12 +48,6 @@ interface QuestOverlayState {
 	proximityMonitorInterval: ReturnType<typeof setInterval> | null; // Monitor player proximity to static overlays
 	onNpcFound?: (npcName: string) => void;
 	compassOverlayEnabled: boolean;
-	// Minimap overlay split into arrow (very taxing) and marker (light)
-	minimapArrowEnabled: boolean;
-	minimapMarkerEnabled: boolean;
-	minimapOverlay: MinimapDirectionOverlay | null; // Minimap direction overlay instance
-	hudCompassEnabled: boolean; // Enable HUD compass direction indicator
-	hudCompassOverlay: HudCompassOverlay | null; // HUD compass overlay instance
 	resolutionChangeCleanup: (() => void) | null; // Cleanup function for resolution change listener
 }
 
@@ -81,11 +73,6 @@ let state: QuestOverlayState = {
 	visibilityMonitorInterval: null,
 	proximityMonitorInterval: null,
 	compassOverlayEnabled: false,
-	minimapArrowEnabled: false, // Very taxing - off by default
-	minimapMarkerEnabled: true, // Light - on by default
-	minimapOverlay: null,
-	hudCompassEnabled: false, // Disable by default (user opt-in)
-	hudCompassOverlay: null,
 	resolutionChangeCleanup: null,
 };
 
@@ -228,7 +215,10 @@ const DEBUG_DISABLE_ALL_OVERLAYS = false;
 
 // Individual debug flags for testing
 const DEBUG_DISABLE_NPC_ARROWS = false;
-const DEBUG_DISABLE_WANDER_RADIUS = false;
+let wanderRadiusEnabled = true;
+export function setWanderRadiusEnabled(enabled: boolean): void {
+	wanderRadiusEnabled = enabled;
+}
 const DEBUG_DISABLE_OBJECT_TILES = false;
 
 /**
@@ -266,27 +256,6 @@ async function initOverlays(): Promise<boolean> {
 
 		// Initialize UI scale manager to detect resolution/scaling changes
 		await initUIScaleManager();
-
-		// Initialize minimap direction overlay (if arrow or marker is enabled)
-		if ((state.minimapArrowEnabled || state.minimapMarkerEnabled) && !state.minimapOverlay) {
-			try {
-				state.minimapOverlay = await initMinimapDirectionOverlay();
-				// Configure which components are enabled
-				state.minimapOverlay.setArrowEnabled(state.minimapArrowEnabled);
-				state.minimapOverlay.setMarkerEnabled(state.minimapMarkerEnabled);
-			} catch (e) {
-				console.warn("[QuestOverlay] Failed to init minimap direction overlay:", e);
-			}
-		}
-
-		// Initialize HUD compass overlay
-		if (state.hudCompassEnabled && !state.hudCompassOverlay) {
-			try {
-				state.hudCompassOverlay = await initHudCompassOverlay();
-			} catch (e) {
-				console.warn("[QuestOverlay] Failed to init HUD compass overlay:", e);
-			}
-		}
 
 		// Register for resolution changes (if not already registered)
 		if (!state.resolutionChangeCleanup) {
@@ -1113,7 +1082,7 @@ export async function activateStepOverlays(
 		}
 
 		// Draw wander radius if available
-		if (!DEBUG_DISABLE_WANDER_RADIUS && npc.wanderRadius) {
+		if (wanderRadiusEnabled && npc.wanderRadius) {
 			const handle = await drawWanderRadiusFilled(npc);
 			if (handle) {
 				state.activeOverlays.push(handle);
@@ -1146,32 +1115,6 @@ export async function activateStepOverlays(
 	// Start proximity monitoring for static overlays (triggers scan when player approaches)
 	startProximityMonitoring();
 
-	// Start minimap direction indicator if enabled (arrow or marker) and we have targets
-	if ((state.minimapArrowEnabled || state.minimapMarkerEnabled) && state.minimapOverlay && (npcs.length > 0 || objects.length > 0)) {
-		state.minimapOverlay.setTargetsFromQuestStep(npcs, objects);
-		state.minimapOverlay.start(300); // Update every 300ms
-	}
-
-	// Start HUD compass if enabled and we have targets
-	if (state.hudCompassEnabled && state.hudCompassOverlay && (npcs.length > 0 || objects.length > 0)) {
-		// Get first target location (NPC or object)
-		let targetLat: number | undefined;
-		let targetLng: number | undefined;
-
-		if (npcs.length > 0 && npcs[0].npcLocation) {
-			targetLat = npcs[0].npcLocation.lat;
-			targetLng = npcs[0].npcLocation.lng;
-		} else if (objects.length > 0 && objects[0].objectLocation?.[0]) {
-			targetLat = objects[0].objectLocation[0].lat;
-			targetLng = objects[0].objectLocation[0].lng;
-		}
-
-		if (targetLat !== undefined && targetLng !== undefined) {
-			state.hudCompassOverlay.setTarget(targetLat, targetLng);
-			state.hudCompassOverlay.setVisible(true);
-		}
-	}
-
 	return true;
 }
 
@@ -1182,18 +1125,6 @@ export async function deactivateStepOverlays(): Promise<void> {
 	stopNpcScanning();
 	stopVisibilityMonitoring();
 	stopProximityMonitoring();
-
-	// Stop minimap direction overlay
-	if (state.minimapOverlay) {
-		state.minimapOverlay.stop();
-		state.minimapOverlay.clearTargets();
-	}
-
-	// Stop HUD compass overlay
-	if (state.hudCompassOverlay) {
-		state.hudCompassOverlay.clearTarget();
-		state.hudCompassOverlay.setVisible(false);
-	}
 
 	await clearOverlays();
 	state.isActive = false;
@@ -1414,129 +1345,6 @@ export function isPathOverlayActive(): boolean {
 	return pathState.isActive;
 }
 
-/**
- * Enable or disable the minimap direction arrow (very taxing)
- * Call this when the setting changes
- */
-export function setMinimapArrowEnabled(enabled: boolean): void {
-	state.minimapArrowEnabled = enabled;
-
-	if (state.minimapOverlay) {
-		state.minimapOverlay.setArrowEnabled(enabled);
-
-		// If both are disabled, stop the overlay
-		if (!enabled && !state.minimapMarkerEnabled) {
-			state.minimapOverlay.stop();
-			state.minimapOverlay.clearTargets();
-		} else if ((enabled || state.minimapMarkerEnabled) && state.isActive && state.currentStep) {
-			// Re-enable while a step is active: restart with current targets
-			const { npc: npcs, object: objects } = state.currentStep.highlights;
-			if (npcs.length > 0 || objects.length > 0) {
-				state.minimapOverlay.setTargetsFromQuestStep(npcs, objects);
-				state.minimapOverlay.start(300);
-			}
-		}
-	}
-}
-
-/**
- * Enable or disable the minimap direction marker (light resource usage)
- * Call this when the setting changes
- */
-export function setMinimapMarkerEnabled(enabled: boolean): void {
-	state.minimapMarkerEnabled = enabled;
-
-	if (state.minimapOverlay) {
-		state.minimapOverlay.setMarkerEnabled(enabled);
-
-		// If both are disabled, stop the overlay
-		if (!enabled && !state.minimapArrowEnabled) {
-			state.minimapOverlay.stop();
-			state.minimapOverlay.clearTargets();
-		} else if ((enabled || state.minimapArrowEnabled) && state.isActive && state.currentStep) {
-			// Re-enable while a step is active: restart with current targets
-			const { npc: npcs, object: objects } = state.currentStep.highlights;
-			if (npcs.length > 0 || objects.length > 0) {
-				state.minimapOverlay.setTargetsFromQuestStep(npcs, objects);
-				state.minimapOverlay.start(300);
-			}
-		}
-	}
-}
-
-/**
- * Check if minimap arrow is enabled
- */
-export function isMinimapArrowEnabled(): boolean {
-	return state.minimapArrowEnabled;
-}
-
-/**
- * Check if minimap marker is enabled
- */
-export function isMinimapMarkerEnabled(): boolean {
-	return state.minimapMarkerEnabled;
-}
-
-/**
- * Enable or disable the HUD compass overlay
- * Call this when the setting changes
- */
-export async function setHudCompassEnabled(enabled: boolean): Promise<void> {
-	state.hudCompassEnabled = enabled;
-
-	if (!enabled && state.hudCompassOverlay) {
-		// Disable: clear target and hide
-		state.hudCompassOverlay.clearTarget();
-		state.hudCompassOverlay.setVisible(false);
-	} else if (enabled) {
-		// Initialize if needed
-		if (!state.hudCompassOverlay) {
-			try {
-				state.hudCompassOverlay = await initHudCompassOverlay();
-			} catch (e) {
-				console.warn("[QuestOverlay] Failed to init HUD compass overlay:", e);
-				return;
-			}
-		}
-
-		// Re-enable while a step is active: restart with current targets
-		if (state.hudCompassOverlay && state.isActive && state.currentStep) {
-			const { npc: npcs, object: objects } = state.currentStep.highlights;
-			let targetLat: number | undefined;
-			let targetLng: number | undefined;
-
-			if (npcs.length > 0 && npcs[0].npcLocation) {
-				targetLat = npcs[0].npcLocation.lat;
-				targetLng = npcs[0].npcLocation.lng;
-			} else if (objects.length > 0 && objects[0].objectLocation?.[0]) {
-				targetLat = objects[0].objectLocation[0].lat;
-				targetLng = objects[0].objectLocation[0].lng;
-			}
-
-			if (targetLat !== undefined && targetLng !== undefined) {
-				state.hudCompassOverlay.setTarget(targetLat, targetLng);
-				state.hudCompassOverlay.setVisible(true);
-			}
-		}
-	}
-}
-
-/**
- * Check if HUD compass overlay is enabled
- */
-export function isHudCompassEnabled(): boolean {
-	return state.hudCompassEnabled;
-}
-
-/**
- * Set HUD compass position
- */
-export function setHudCompassPosition(x: number, y: number): void {
-	if (state.hudCompassOverlay) {
-		state.hudCompassOverlay.setPosition(x, y);
-	}
-}
 
 /**
  * Get count of path overlay tiles

@@ -9,6 +9,7 @@ export interface SettingsState {
 	// GL Features
 	dialogSolverEnabled: boolean;
 	compassOverlayEnabled: boolean;
+	wanderRadiusEnabled: boolean;
 	pathfindingEnabled: boolean;
 	stepOverlayEnabled: boolean;
 	stepOverlayX: number;
@@ -47,6 +48,7 @@ const defaultSettings: SettingsState = {
 	// GL Features
 	dialogSolverEnabled: false,
 	compassOverlayEnabled: false,
+	wanderRadiusEnabled: true,  // On by default
 	pathfindingEnabled: false,
 	stepOverlayEnabled: false,
 	stepOverlayX: 50,

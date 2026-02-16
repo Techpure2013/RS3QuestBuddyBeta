@@ -3,7 +3,7 @@
  *
  * Provides a unified interface for:
  * - NPC/Object overlay management
- * - Pathfinding to step targets (with player position tracking)
+ * - Dialog detection and solving
  *
  * NOTE: Dialog detection uses ts/DialogBoxReader/reader.ts directly.
  * Automatically detects if GL injection is available and falls back gracefully
@@ -12,55 +12,24 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { isGlInjectionAvailable } from "../api/glInjection";
-import type { QuestStep, NpcLocation, NpcWanderRadius } from "../state/types";
+import type { QuestStep } from "../state/types";
 import {
 	activateStepOverlays,
 	deactivateStepOverlays,
 	isOverlayActive,
-	retryPendingOverlays,
-	hasPendingOverlays,
-	setMinimapArrowEnabled,
-	setMinimapMarkerEnabled,
-	setHudCompassEnabled,
-	setHudCompassPosition,
+	setWanderRadiusEnabled,
 } from "./QuestOverlayManager";
 import { onResolutionChange } from "./UIScaleManager";
-import {
-	drawPathTubes,
-	clearPathTubes,
-} from "./PathTubeOverlay";
-import { findPathClient } from "../api/clientPathfinder";
-import { latLngToGameCoords, gameCoordsToLatLng } from "../api/pathfindingApi";
-import {
-	startPlayerTracking,
-	stopPlayerTracking,
-	getPlayerPosition,
-} from "./PlayerPositionTracker";
 import { DialogBoxReader, DialogBoxResult } from "@injection/DialogBoxReader/reader";
 import { SpriteOverlay } from "@injection/util/spriteOverlay";
 
-interface PlayerPosition {
-	location: NpcLocation;
-	floor: number;
-}
-
 interface GlQuestIntegrationOptions {
-	/** Whether pathfinding is enabled (controlled by settings) */
-	pathfindingEnabled?: boolean;
 	/** Whether dialog solver/detection is enabled (controlled by settings) */
 	dialogSolverEnabled?: boolean;
 	/** Whether compass overlay on NPCs is enabled (controlled by settings) */
 	compassOverlayEnabled?: boolean;
-	/** Whether minimap direction arrow is enabled (very taxing) */
-	minimapArrowEnabled?: boolean;
-	/** Whether minimap direction marker is enabled (light) */
-	minimapMarkerEnabled?: boolean;
-	/** Whether HUD compass overlay is enabled (controlled by settings) */
-	hudCompassEnabled?: boolean;
-	/** HUD compass X position */
-	hudCompassX?: number;
-	/** HUD compass Y position */
-	hudCompassY?: number;
+	/** Whether wander radius overlay is enabled */
+	wanderRadiusEnabled?: boolean;
 	/** Callback when a dialog option is completed (player clicked the highlighted button) */
 	onDialogCompleted?: () => void;
 }
@@ -73,131 +42,19 @@ interface GlQuestIntegrationReturn {
 	/** Whether GL systems are fully initialized (dialog reader, overlays ready) */
 	isGlReady: boolean;
 	isOverlayActive: boolean;
-	setPlayerPosition: (position: PlayerPosition | null) => void;
-	isPathfindingActive: boolean;
-	playerPosition: PlayerPosition | null;
-}
-
-// Config
-
-const PLAYER_TRACKING_INTERVAL = 600;
-const MIN_MOVE_DISTANCE = 3;
-const MAX_PATH_TILES = 60;
-const MAX_PATH_RANGE = 50;
-const FAILED_PATH_CACHE_MS = 30000;
-
-const failedPathCache = new Map<string, number>();
-const OBJECT_ARRIVAL_DISTANCE = 3;
-
-interface TargetWithMeta {
-	lat: number;
-	lng: number;
-	floor: number;
-	isNpc: boolean;
-	wanderRadius?: NpcWanderRadius;
-}
-
-function isPlayerAtTarget(playerPos: PlayerPosition, target: TargetWithMeta): boolean {
-	if (playerPos.floor !== target.floor) return false;
-
-	const playerLat = playerPos.location.lat;
-	const playerLng = playerPos.location.lng;
-
-	if (target.isNpc && target.wanderRadius) {
-		const { bottomLeft, topRight } = target.wanderRadius;
-		return (
-			playerLat >= bottomLeft.lat &&
-			playerLat <= topRight.lat &&
-			playerLng >= bottomLeft.lng &&
-			playerLng <= topRight.lng
-		);
-	}
-
-	const dx = Math.abs(playerLat - target.lat);
-	const dy = Math.abs(playerLng - target.lng);
-	const distance = Math.sqrt(dx * dx + dy * dy);
-	return distance <= OBJECT_ARRIVAL_DISTANCE;
-}
-
-function extractNearestTarget(
-	step: QuestStep,
-	playerPos: PlayerPosition | null
-): TargetWithMeta | null {
-	const targets: TargetWithMeta[] = [];
-
-	if (step.highlights?.npc) {
-		for (const npc of step.highlights.npc) {
-			if (npc.npcLocation) {
-				targets.push({
-					lat: npc.npcLocation.lat,
-					lng: npc.npcLocation.lng,
-					floor: npc.floor ?? step.floor ?? 0,
-					isNpc: true,
-					wanderRadius: npc.wanderRadius,
-				});
-			}
-		}
-	}
-
-	if (step.highlights?.object) {
-		for (const obj of step.highlights.object) {
-			if (obj.objectLocation && obj.objectLocation.length > 0) {
-				const loc = obj.objectLocation[0];
-				targets.push({
-					lat: loc.lat,
-					lng: loc.lng,
-					floor: obj.floor ?? step.floor ?? 0,
-					isNpc: false,
-				});
-			}
-		}
-	}
-
-	if (targets.length === 0) return null;
-
-	if (playerPos) {
-		let nearest = targets[0];
-		let nearestDist = Infinity;
-
-		for (const t of targets) {
-			const floorPenalty = t.floor === playerPos.floor ? 0 : 1000;
-			const dist =
-				Math.abs(t.lat - playerPos.location.lat) +
-				Math.abs(t.lng - playerPos.location.lng) +
-				floorPenalty;
-
-			if (dist < nearestDist) {
-				nearestDist = dist;
-				nearest = t;
-			}
-		}
-		return nearest;
-	}
-
-	return targets[0];
 }
 
 export function useGlQuestIntegration(
 	options: GlQuestIntegrationOptions = {}
 ): GlQuestIntegrationReturn {
 	const {
-		pathfindingEnabled = false,
 		dialogSolverEnabled = false,
 		compassOverlayEnabled = false,
-		minimapArrowEnabled = false,
-		minimapMarkerEnabled = true,
-		hudCompassEnabled = false,
-		hudCompassX = 1700,
-		hudCompassY = 900,
+		wanderRadiusEnabled = true,
 		onDialogCompleted,
 	} = options;
 	const currentStepIndexRef = useRef<number>(-1);
 	const currentStepRef = useRef<QuestStep | null>(null);
-	const lastPathPositionRef = useRef<{ lat: number; lng: number; floor: number } | null>(null);
-	// Track the destination we successfully pathed to - prevents re-pathing on floor detection changes
-	const lastSuccessfulDestinationRef = useRef<{ lat: number; lng: number; floor: number } | null>(null);
-	const [isPathfindingActive, setIsPathfindingActive] = useState(false);
-	const [playerPosition, setPlayerPositionState] = useState<PlayerPosition | null>(null);
 
 	// Track when GL systems are fully initialized
 	const [isGlReady, setIsGlReady] = useState(false);
@@ -620,194 +477,8 @@ export function useGlQuestIntegration(
 	useEffect(() => {
 		return () => {
 			deactivateStepOverlays();
-			stopPlayerTracking(true);
-			clearPathTubes();
 		};
 	}, []);
-
-	const drawPathToTarget = useCallback(async (step: QuestStep, playerPos: PlayerPosition) => {
-		const target = extractNearestTarget(step, playerPos);
-		if (!target) {
-			return;
-		}
-
-		if (isPlayerAtTarget(playerPos, target)) {
-			await clearPathTubes();
-			setIsPathfindingActive(false);
-			lastPathPositionRef.current = null;
-			lastSuccessfulDestinationRef.current = null;
-			return;
-		}
-
-		// Check if we already have a path to the same destination
-		// Skip re-pathing if destination hasn't changed - prevents wasted pathfinding on floor detection changes
-		const destLat = target.lat;
-		const destLng = target.lng;
-		const destFloor = target.floor;
-
-		if (lastSuccessfulDestinationRef.current && isPathfindingActive) {
-			const destDx = Math.abs(destLat - lastSuccessfulDestinationRef.current.lat);
-			const destDz = Math.abs(destLng - lastSuccessfulDestinationRef.current.lng);
-			const destFloorSame = destFloor === lastSuccessfulDestinationRef.current.floor;
-
-			// If destination is the same and we have an active path, skip re-pathing
-			if (destFloorSame && destDx < 3 && destDz < 3) {
-				// Still check if player moved enough to warrant a path update
-				if (lastPathPositionRef.current) {
-					const dx = Math.abs(playerPos.location.lat - lastPathPositionRef.current.lat);
-					const dz = Math.abs(playerPos.location.lng - lastPathPositionRef.current.lng);
-					if (dx < MIN_MOVE_DISTANCE && dz < MIN_MOVE_DISTANCE) {
-						return; // Player hasn't moved much, keep existing path
-					}
-				}
-			}
-		}
-
-		// Check if we should skip recalculation (player hasn't moved enough)
-		let forceRedraw = false;
-		if (lastPathPositionRef.current) {
-			const dx = Math.abs(playerPos.location.lat - lastPathPositionRef.current.lat);
-			const dz = Math.abs(playerPos.location.lng - lastPathPositionRef.current.lng);
-
-			if (dx < MIN_MOVE_DISTANCE && dz < MIN_MOVE_DISTANCE) {
-				return;
-			}
-			// Player moved significantly - force redraw to ensure path updates
-			forceRedraw = true;
-		}
-
-		try {
-			// Don't clear first - let drawPathTubes handle the update
-			// Clearing first causes a race condition where the old overlay stops
-			// before the new one is ready
-
-			const fromCoords = latLngToGameCoords(playerPos.location.lat, playerPos.location.lng);
-			const toCoords = latLngToGameCoords(target.lat, target.lng);
-
-			const cacheKey = `${Math.floor(fromCoords.x / 10)},${Math.floor(fromCoords.y / 10)},${playerPos.floor}->${Math.floor(toCoords.x / 10)},${Math.floor(toCoords.y / 10)},${target.floor}`;
-
-			const failedAt = failedPathCache.get(cacheKey);
-			if (failedAt && Date.now() - failedAt < FAILED_PATH_CACHE_MS) {
-				setIsPathfindingActive(false);
-				return;
-			}
-
-			const pathResult = await findPathClient(
-				{ x: fromCoords.x, y: fromCoords.y, floor: playerPos.floor },
-				{ x: toCoords.x, y: toCoords.y, floor: target.floor },
-				{ maxDistance: 500, allowDiagonals: true }
-			);
-
-			if (!pathResult.success || pathResult.path.length === 0) {
-				failedPathCache.set(cacheKey, Date.now());
-				if (failedPathCache.size > 20) {
-					const now = Date.now();
-					for (const [key, timestamp] of failedPathCache) {
-						if (now - timestamp > FAILED_PATH_CACHE_MS) {
-							failedPathCache.delete(key);
-						}
-					}
-				}
-				setIsPathfindingActive(false);
-				return;
-			}
-
-			failedPathCache.delete(cacheKey);
-
-			const allPathNodes = pathResult.path.map((node) => {
-				const latLng = gameCoordsToLatLng(node.x, node.y);
-				return {
-					lat: latLng.lat,
-					lng: latLng.lng,
-					floor: node.floor,
-					isTransport: node.isTransport,
-				};
-			});
-
-			let pathToShow = allPathNodes;
-
-			const firstTransportIdx = allPathNodes.findIndex(
-				(node) => node.isTransport && node.floor === playerPos.floor
-			);
-
-			if (firstTransportIdx !== -1) {
-				pathToShow = allPathNodes.slice(0, firstTransportIdx + 1);
-			}
-
-			const visibleNodes = pathToShow.filter((node) => {
-				if (node.isTransport) return true;
-				const dx = Math.abs(node.lat - playerPos.location.lat);
-				const dy = Math.abs(node.lng - playerPos.location.lng);
-				return Math.sqrt(dx * dx + dy * dy) <= MAX_PATH_RANGE;
-			});
-
-			let pathNodes = visibleNodes;
-			if (visibleNodes.length > MAX_PATH_TILES) {
-				const sampleRate = Math.ceil(visibleNodes.length / MAX_PATH_TILES);
-				pathNodes = visibleNodes.filter((node, i) =>
-					i % sampleRate === 0 || i === visibleNodes.length - 1 || node.isTransport
-				);
-			}
-
-			const success = await drawPathTubes(pathNodes, { forceRedraw });
-			setIsPathfindingActive(success);
-
-			if (success) {
-				lastPathPositionRef.current = {
-					lat: playerPos.location.lat,
-					lng: playerPos.location.lng,
-					floor: playerPos.floor,
-				};
-				// Track successful destination to prevent re-pathing on floor detection changes
-				lastSuccessfulDestinationRef.current = {
-					lat: destLat,
-					lng: destLng,
-					floor: destFloor,
-				};
-			}
-		} catch (e) {
-			setIsPathfindingActive(false);
-		}
-	}, []);
-
-	const handlePositionUpdate = useCallback(
-		(position: PlayerPosition) => {
-			setPlayerPositionState(position);
-
-			if (pathfindingEnabled && currentStepRef.current) {
-				drawPathToTarget(currentStepRef.current, position);
-			}
-
-			if (hasPendingOverlays()) {
-				retryPendingOverlays().catch(() => {});
-			}
-		},
-		[drawPathToTarget, pathfindingEnabled]
-	);
-
-	useEffect(() => {
-		if (!pathfindingEnabled) {
-			stopPlayerTracking(true);
-			clearPathTubes();
-			setIsPathfindingActive(false);
-			lastPathPositionRef.current = null;
-			lastSuccessfulDestinationRef.current = null;
-		} else if (currentStepRef.current) {
-			const pos = getPlayerPosition();
-			const target = extractNearestTarget(currentStepRef.current, pos);
-
-			if (!target) return;
-
-			startPlayerTracking(handlePositionUpdate, PLAYER_TRACKING_INTERVAL, "pathfinding")
-				.then(() => {
-					const currentPos = getPlayerPosition();
-					if (currentPos && currentStepRef.current) {
-						drawPathToTarget(currentStepRef.current, currentPos);
-					}
-				})
-				.catch(() => {});
-		}
-	}, [pathfindingEnabled, handlePositionUpdate, drawPathToTarget]);
 
 	// Re-activate overlays when compassOverlayEnabled changes
 	useEffect(() => {
@@ -820,33 +491,11 @@ export function useGlQuestIntegration(
 		}).catch(() => {});
 	}, [compassOverlayEnabled]);
 
-	// Handle minimapArrowEnabled toggle
+	// Handle wanderRadiusEnabled toggle
 	useEffect(() => {
 		if (!isGlInjectionAvailable()) return;
-		setMinimapArrowEnabled(minimapArrowEnabled);
-	}, [minimapArrowEnabled]);
-
-	// Handle minimapMarkerEnabled toggle
-	useEffect(() => {
-		if (!isGlInjectionAvailable()) return;
-		setMinimapMarkerEnabled(minimapMarkerEnabled);
-	}, [minimapMarkerEnabled]);
-
-	// Handle hudCompassEnabled toggle
-	useEffect(() => {
-		if (!isGlInjectionAvailable()) return;
-
-		// Update the HUD compass overlay state in QuestOverlayManager
-		setHudCompassEnabled(hudCompassEnabled);
-	}, [hudCompassEnabled]);
-
-	// Handle hudCompass position changes
-	useEffect(() => {
-		if (!isGlInjectionAvailable()) return;
-
-		// Update the HUD compass position
-		setHudCompassPosition(hudCompassX, hudCompassY);
-	}, [hudCompassX, hudCompassY]);
+		setWanderRadiusEnabled(wanderRadiusEnabled);
+	}, [wanderRadiusEnabled]);
 
 	// Handle dialogSolverEnabled toggle
 	useEffect(() => {
@@ -866,30 +515,8 @@ export function useGlQuestIntegration(
 			try {
 				currentStepIndexRef.current = stepIndex;
 				currentStepRef.current = step;
-				lastPathPositionRef.current = null;
-				lastSuccessfulDestinationRef.current = null; // Clear destination when step changes
 
 				if (!isGlInjectionAvailable()) return;
-
-				await clearPathTubes();
-				setIsPathfindingActive(false);
-
-				if (pathfindingEnabled) {
-					const initialPos = getPlayerPosition();
-					const target = extractNearestTarget(step, initialPos);
-
-					if (target) {
-						try {
-							await startPlayerTracking(handlePositionUpdate, PLAYER_TRACKING_INTERVAL, "pathfinding");
-							const pos = getPlayerPosition();
-							if (pos) {
-								await drawPathToTarget(step, pos);
-							}
-						} catch (e) {
-							// Ignore
-						}
-					}
-				}
 
 				activateStepOverlays(step, {
 					onNpcFound: () => {},
@@ -902,33 +529,19 @@ export function useGlQuestIntegration(
 				// Ignore
 			}
 		},
-		[handlePositionUpdate, drawPathToTarget, pathfindingEnabled, startDialogDetection, compassOverlayEnabled]
+		[startDialogDetection, compassOverlayEnabled]
 	);
 
 	const onStepDeactivated = useCallback(async () => {
 		try {
 			await deactivateStepOverlays();
-			await stopPlayerTracking(true);
-			await clearPathTubes();
 			await stopDialogDetection();
 			currentStepIndexRef.current = -1;
 			currentStepRef.current = null;
-			lastPathPositionRef.current = null;
-			lastSuccessfulDestinationRef.current = null;
-			setIsPathfindingActive(false);
 		} catch (e) {
 			// Ignore
 		}
 	}, [stopDialogDetection]);
-
-	const setPlayerPosition = useCallback(
-		(position: PlayerPosition | null) => {
-			if (position) {
-				handlePositionUpdate(position);
-			}
-		},
-		[handlePositionUpdate]
-	);
 
 	return {
 		onStepActivated,
@@ -936,9 +549,6 @@ export function useGlQuestIntegration(
 		isGlAvailable: isGlInjectionAvailable(),
 		isGlReady,
 		isOverlayActive: isOverlayActive(),
-		setPlayerPosition,
-		isPathfindingActive,
-		playerPosition,
 	};
 }
 

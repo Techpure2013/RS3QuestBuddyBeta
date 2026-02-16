@@ -28,14 +28,6 @@ export {
 	drawWaypointMarker,
 } from "./QuestOverlayManager";
 
-// Connected tube path markers (used with pathfinding)
-export {
-	drawPathTubes,
-	clearPathTubes,
-	isPathTubesActive,
-	invalidateTubeAnchorVao,
-} from "./PathTubeOverlay";
-
 // Compass rose NPC markers
 export {
 	drawNpcCompassRose,
@@ -78,16 +70,3 @@ export {
 	renderQuestStep,
 } from "./QuestStepOverlay";
 export type { OverlayPosition, UseQuestStepOverlayOptions, UseQuestStepOverlayReturn } from "./QuestStepOverlay";
-
-// HUD compass overlay - 2D compass that glows toward quest objectives
-export {
-	HudCompassOverlay,
-	getHudCompassOverlay,
-	initHudCompassOverlay,
-} from "./HudCompassOverlay";
-export type { HudCompassPosition } from "./HudCompassOverlay";
-export { useHudCompassOverlay } from "./useHudCompassOverlay";
-export type { UseHudCompassOverlayOptions, UseHudCompassOverlayReturn } from "./useHudCompassOverlay";
-
-// HUD compass enable/disable/position control
-export { setHudCompassEnabled, isHudCompassEnabled, setHudCompassPosition } from "./QuestOverlayManager";
