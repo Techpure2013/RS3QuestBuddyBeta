@@ -27,7 +27,6 @@ postgres-data/
 .prettierrc
 # Node stuff
 node_modules/
-appconfig.local.json
 dist/.claude/
 .claude/
 dist/
