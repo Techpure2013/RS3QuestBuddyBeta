@@ -1150,18 +1150,6 @@ function getPackedBoneTransform(packedbones: number[][], boneindex: number) {
     let errdiag = Math.abs(q00 - 1) + Math.abs(q11 - 1) + Math.abs(q22 - 1);
     let errother = [q01, q02, q10, q12, q20, q21].reduce((s, v) => s + Math.abs(v), 0);
 
-    let sumtrans = translate[0] + translate[1] + translate[2];
-
-    if (Math.abs(det - 1) > 0.1) {
-        console.log(boneindex, det);
-    }
-    if (sumtrans > 1000) {
-        //console.log(sumtrans);
-    }
-    if (errdiag > 0.1 || errother > 0.1) {
-        //console.log([[q00, q01, q02], [q10, q11, q12], [q20, q21, q22]]);
-    }
-
     //quarternion rotation
     let qw = 1, qx = 0, qy = 0, qz = 0;
     //use unit quaternion when scaled to 0 in any direction
@@ -1450,9 +1438,6 @@ export function findAnimCycle(framedata: BoneAnim[]) {
         }
         startscores.push({ score: score, start: startstep * step });
     }
-    //console.log(scores);
-    //console.log(startscores);
-    console.log(`extracted anim: ${beststart * step}-${(beststart + best) * step} (${best * step})`);
     return { duration: best * step, start: beststart * step };
 }
 

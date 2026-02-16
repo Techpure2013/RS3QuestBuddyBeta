@@ -43,9 +43,6 @@ export class QuestEngine {
 		this.itemsSatisfied = false;
 		this.hasTriggered = false;
 
-		if (this.conditions) {
-			console.log(`[QuestEngine] Activated step with conditions: type=${this.conditions.type}`, this.conditions);
-		}
 	}
 
 	deactivateStep(): void {
@@ -60,7 +57,6 @@ export class QuestEngine {
 	markDialogCompleted(): void {
 		if (!this.enabled || !this.conditions) return;
 		this.dialogCompletedCount++;
-		console.log(`[QuestEngine] Dialog completed: ${this.dialogCompletedCount}/${this.conditions.dialog?.length ?? 0}`);
 		this.evaluate();
 	}
 
@@ -83,7 +79,6 @@ export class QuestEngine {
 
 			if (distance <= radius) {
 				this.locationsReached.add(i);
-				console.log(`[QuestEngine] Location ${i + 1}/${this.conditions.location.length} reached: (${loc.lat}, ${loc.lng}) within radius ${radius}`);
 				this.evaluate();
 			}
 		}
@@ -132,9 +127,6 @@ export class QuestEngine {
 
 		if (allSatisfied !== this.itemsSatisfied) {
 			this.itemsSatisfied = allSatisfied;
-			if (allSatisfied) {
-				console.log(`[QuestEngine] All required items found`);
-			}
 			this.evaluate();
 		}
 	}
@@ -181,7 +173,6 @@ export class QuestEngine {
 
 		if (shouldComplete) {
 			this.hasTriggered = true;
-			console.log(`[QuestEngine] Step complete! Triggering auto-advance.`);
 			this.config.onStepComplete();
 		}
 	}

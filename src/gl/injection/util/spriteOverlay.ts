@@ -40,7 +40,6 @@ export function setUIScaleState(state: {
     uiHeight: state.uiHeight ?? 1080,
     scalingTextureId: state.scalingTextureId ?? 0,
   };
-  console.log(`[SpriteOverlay] Scale state updated: isScaled=${state.isScaled}, uiSize=${uiScaleState.uiWidth}x${uiScaleState.uiHeight}, scalingTex=${uiScaleState.scalingTextureId}`);
 }
 
 
@@ -213,18 +212,15 @@ export class SpriteOverlay {
       if (view) {
         this.screenWidth = view.width;
         this.screenHeight = view.height;
-        console.log(`[SpriteOverlay] Viewport detected: ${view.width}x${view.height}`);
       } else {
         // Fallback to getRsWidth/getRsHeight
         this.screenWidth = patchrs.native.getRsWidth() || 1920;
         this.screenHeight = patchrs.native.getRsHeight() || 1080;
-        console.log(`[SpriteOverlay] Using fallback screen size: ${this.screenWidth}x${this.screenHeight}`);
       }
     } catch (e) {
       // Fallback on error
       this.screenWidth = patchrs.native.getRsWidth() || 1920;
       this.screenHeight = patchrs.native.getRsHeight() || 1080;
-      console.warn(`[SpriteOverlay] Viewport detection failed, using fallback: ${this.screenWidth}x${this.screenHeight}`);
     }
   }
 
@@ -246,7 +242,6 @@ export class SpriteOverlay {
     // Stop all overlays since they target the old framebuffer configuration
     // This prevents stacking when moving between screens
     this.stopAll();
-    console.log(`[SpriteOverlay] Cache invalidated, all overlays stopped, screen: ${this.screenWidth}x${this.screenHeight}`);
   }
 
   /**
@@ -266,35 +261,22 @@ export class SpriteOverlay {
         framebufferId: 0,
       });
 
-      console.log(`[SpriteOverlay] findUIFramebuffer: Got ${screenRenders.length} renders from fb 0`);
-
       // Step 2: Find the Lanczos scaler program and get its source texture
       let scalingTextureId = 0;
-      let scalerCount = 0;
-      let uiCount = 0;
       for (const render of screenRenders) {
         if (!render.program) continue;
         const progMeta = getProgramMeta(render.program);
 
         if (progMeta.isUiScaler) {
-          scalerCount++;
           // Get the texture the scaler reads from
           // Try samplers first (texturesnapshot), then textures as fallback
           const textureData = render.samplers || render.textures || {};
           const sampler = Object.values(textureData)[0] as patchrs.TextureSnapshot | patchrs.TrackedTexture | undefined;
           if (sampler) {
             scalingTextureId = sampler.texid;
-            console.log(`[SpriteOverlay] Found Lanczos scaler reading from texture ${scalingTextureId} (${sampler.width}x${sampler.height})`);
             break;
-          } else {
-            console.log(`[SpriteOverlay] UiScaler found but no texture data in samplers or textures`);
           }
         }
-        if (progMeta.isUi) uiCount++;
-      }
-
-      if (scalerCount === 0) {
-        console.log(`[SpriteOverlay] No UiScaler found in fb 0 renders (found ${uiCount} UI programs)`);
       }
 
       // Step 3: If we found a scaling texture, record from its framebuffer
@@ -313,12 +295,10 @@ export class SpriteOverlay {
             width: uiRender.viewport.width,
             height: uiRender.viewport.height,
           };
-          console.log(`[SpriteOverlay] Found UI framebuffer: fb=${info.framebufferId}, size=${info.width}x${info.height}`);
           return info;
         }
 
         // If no viewport in renders, use the texture dimensions
-        console.log(`[SpriteOverlay] No viewport in UI renders, using texture dimensions`);
         // We need to find the framebuffer ID - check the first render
         const firstRender = uiRenders[0];
         if (firstRender) {
@@ -341,7 +321,6 @@ export class SpriteOverlay {
             width: render.viewport.width,
             height: render.viewport.height,
           };
-          console.log(`[SpriteOverlay] Found UI framebuffer (non-scaled): fb=${info.framebufferId}, size=${info.width}x${info.height}`);
           return info;
         }
       }
@@ -349,7 +328,6 @@ export class SpriteOverlay {
       // Final fallback: use framebuffer 0 with viewport dimensions
       const viewport = screenRenders.find(r => r.viewport)?.viewport;
       if (viewport) {
-        console.log(`[SpriteOverlay] Fallback: using fb 0 with viewport ${viewport.width}x${viewport.height}`);
         return {
           framebufferId: 0,
           width: viewport.width,
@@ -472,8 +450,6 @@ export class SpriteOverlay {
       // At 4K: render to UI framebuffer (fb 28), non-scaled: render to screen (fb 0)
       const targetFb = framebufferId;
 
-      console.log(`[SpriteOverlay] Creating overlay: targetFb=${targetFb}, scalingTex=${scalingTexId}, isScaled=${isScaled}`);
-
       const handle = patchrs.native.beginOverlay(
         { framebufferId: targetFb }, // Match draws to our target framebuffer
         program,
@@ -489,7 +465,6 @@ export class SpriteOverlay {
         }
       );
       this.overlayHandles.push(handle);
-      console.log(`[SpriteOverlay] Rect (${Math.round(x)},${Math.round(y)}) ${Math.round(width)}x${Math.round(height)}, fb=${targetFb}, size=${fbWidth}x${fbHeight}${isScaled ? ' [4K]' : ''}`);
       return handle;
     } catch (e) {
       console.error("[SpriteOverlay] Failed:", e);
@@ -502,18 +477,13 @@ export class SpriteOverlay {
    */
   async stop(handle: patchrs.GlOverlay): Promise<void> {
     if (!handle) {
-      console.warn("[SpriteOverlay] stop() called with null/undefined handle");
       return;
     }
     try {
-      console.log(`[SpriteOverlay] Stopping overlay handle, tracked count: ${this.overlayHandles.length}`);
       handle.stop();
       const idx = this.overlayHandles.indexOf(handle);
       if (idx !== -1) {
         this.overlayHandles.splice(idx, 1);
-        console.log(`[SpriteOverlay] Overlay stopped and removed from tracking, remaining: ${this.overlayHandles.length}`);
-      } else {
-        console.log(`[SpriteOverlay] Overlay stopped but was not in tracking list`);
       }
     } catch (e) {
       console.error("[SpriteOverlay] Error stopping overlay:", e);
@@ -524,12 +494,6 @@ export class SpriteOverlay {
    * Stop all overlays
    */
   async stopAll(): Promise<void> {
-    const count = this.overlayHandles.length;
-    if (count === 0) {
-      console.log("[SpriteOverlay] stopAll() called but no overlays to stop");
-      return;
-    }
-    console.log(`[SpriteOverlay] stopAll() stopping ${count} overlays`);
     for (const handle of this.overlayHandles) {
       try {
         handle.stop();
@@ -538,7 +502,6 @@ export class SpriteOverlay {
       }
     }
     this.overlayHandles = [];
-    console.log(`[SpriteOverlay] All overlays stopped`);
   }
 
   /**

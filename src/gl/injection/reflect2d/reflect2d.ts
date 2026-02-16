@@ -99,7 +99,6 @@ class AtlasTextureSnapshotCache {
 		// let frag = this.sprites.find(q => q.x == x && q.y == y && q.width == w && q.height == h);
 		let frag = this.sprites.get(key);
 		if (frag && (frag.width != w || frag.height != h)) {
-			console.log("overwrote atlas sprite with different size");
 			frag = undefined;
 		}
 		if (!frag) {
@@ -183,7 +182,6 @@ class AtlasTextureSnapshotCache {
 			// Look up in sprite cache
 			const match = sprites.findItemByPHash(pHashHex, 10);
 			if (match) {
-				console.log(`[pHash] Matched: ${pHashHex} -> "${match.name}" (distance: ${match.distance})`);
 				// Create a SpriteInfo for this item
 				const info = new SpriteInfo(-2, 0, frag.pixelhash); // -2 = item sprite
 				info.itemName = match.name;
@@ -233,7 +231,6 @@ class AtlasTextureSnapshotCache {
 			if (hash == font.basesprite.hash) {
 				let basefrag = this.makeFragment(fontx, fonty, fontw, fonth, font.basesprite);
 				this.fontsheets.push({ font: font, frag: basefrag });
-				console.log(`font ${font.spriteid} base matched by char ${fontchr.charcode}`);
 				// detect fragments that belong to this font
 				for (let chr of font.subs.values()) {
 					let fontchr = chr.fontchr!
@@ -312,7 +309,6 @@ export function getUIState(renders: patchrs.RenderInvocation[], cache: AtlasTrac
 		let tex = render.samplers[samplerid];
 		if (!tex) {
 			// TODO fix underlying, this seems to happen after for some reason the uniform buffer is all 0
-			console.log("ui texture sampler not found");
 			continue;
 		}
 
@@ -358,11 +354,9 @@ export function getUIState(renders: patchrs.RenderInvocation[], cache: AtlasTrac
 					continue;
 				}
 				if (samplew == 0 || sampleh == 0) {
-					console.log("skipped zero size tex");
 					continue;
 				}
 				if (texboxw == 0 || texboxh == 0) {
-					console.log("skipped zero size tex bounding box");
 					continue;
 				}
 

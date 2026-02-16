@@ -323,10 +323,8 @@ function reloadDll() {
 
 	let pluginDir = "";
 	if (debugstat && (!releasestat || debugstat.mtimeMs > releasestat.mtimeMs)) {
-		console.log("using debug plugin");
 		pluginDir = nativeDebugDir;
 	} else if (releasestat) {
-		console.log("using release plugin");
 		pluginDir = nativeReleaseDir;
 	} else {
 		throw new Error("No native plugin found");
@@ -341,11 +339,9 @@ function reloadDll() {
 try {
 	if (typeof globalThis !== "undefined" && globalThis.alt1gl) {
 		// Alt1GL-Launcher preload provided the native GL client directly
-		console.log("using launcher-provided native addon (globalThis.alt1gl)");
 		native = globalThis.alt1gl;
 	} else if (typeof window !== "undefined" && (window as any).alt1 && typeof (window as any).alt1.recordRenderCalls === "function") {
 		// Alt1 or launcher exposed the GL client on window.alt1
-		console.log("using native addon from window.alt1 (GL client detected)");
 		native = (window as any).alt1;
 	} else if (typeof __non_webpack_require__ != "undefined") {
 		reloadDll();
@@ -353,15 +349,7 @@ try {
 	// Only set up logging callback if native addon is available
 	if (native && native.debug) {
 		native.debug.setLogCb(e => {
-			let m = e.match(/bufferdata (\d+)\->(\d+)/);
-			if (m) {
-				let dif = +m[1] - +m[2];
-				if (dif > 1e6) {
-					//console.log("large alloc: " + dif);
-				}
-			} else {
-				//console.info(e)
-			}
+			// Suppress most native debug logs
 		});
 	}
 } catch (e) {
@@ -390,10 +378,8 @@ export function injectClient(pid: number) {
 
 	let nativeDir = "";
 	if (debugstat && (!releasestat || debugstat.modifiedTime > releasestat.modifiedTime)) {
-		console.log("using debug gl native");
 		nativeDir = nativeDebugDir;
 	} else if (releasestat) {
-		console.log("using release gl native");
 		nativeDir = nativeReleaseDir;
 	} else {
 		throw new Error("No native plugin found");
@@ -426,7 +412,6 @@ export function injectClient(pid: number) {
 	} else {
 		dllname = lastfile;
 	}
-	console.log(dllname);
 	let res = native.debug.injectDll(pid, dllname);
 	let hook: HookResult = { dllname, pid, details: res };
 	return hook;

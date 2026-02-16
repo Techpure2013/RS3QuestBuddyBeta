@@ -211,10 +211,6 @@ export class PlayerPositionTracker {
       timestamp: Date.now(),
     };
 
-    if (this.debug) {
-      console.log(`[PlayerPosition] Found at (${best.x.toFixed(1)}, ${best.z.toFixed(1)}), ${candidates.length} candidates`);
-    }
-
     return {
       x: best.x,
       y: best.y,
@@ -354,22 +350,19 @@ export class PassivePlayerTracker {
   async init(): Promise<boolean> {
     if (this.initialized && this.stream) return true;
 
-    console.log("[PassivePlayer] Initializing stream-based tracking...");
-
-    try {
+    try{
       // Start streaming render calls
       // Need vertexarray + uniforms to match what the active tracker uses
       // This allows getProgramMeta to work and find the player mesh
       this.stream = patchrs.native.streamRenderCalls(
         {
           features: ["uniforms"],
-          framecooldown: 100, // Update every ~100ms
+          framecooldown: 600, // Match PlayerPositionTracker polling interval
         },
         (renders) => this.processRenders(renders)
       );
 
       this.initialized = true;
-      console.log("[PassivePlayer] Stream initialized successfully");
       return true;
     } catch (e) {
       console.error("[PassivePlayer] Init error:", e);
@@ -440,20 +433,11 @@ export class PassivePlayerTracker {
         };
         this.lastUpdateTime = Date.now();
 
-        if (this.debug && (this.processCounter % 50) === 0) {
-          console.log("[PassivePlayer] Position:", x.toFixed(1), z.toFixed(1));
-        }
-
         // Found player, stop searching this frame
         return;
       } catch {
         continue;
       }
-    }
-
-    // Only log failures occasionally to avoid spam
-    if (this.debug && (this.processCounter % 100) === 0) {
-      console.log(`[PassivePlayer] No player found in ${renders.length} renders (${skippedNoShader} skipped - no shader)`);
     }
   }
 

@@ -47,6 +47,8 @@ export const DIALOG_IDS = {
   acceptQuestBg: 17817,
   /** Continue button (click to continue dialog) */
   continueBtn: 18635,
+  /** Accept Quest button variant 2 — render order: subid 0 (bg), 1 (end), 2 (start) */
+  acceptQuestBg2: 60000,
 };
 
 /** Set of all dialog sprite IDs for fast lookup (skip masking) */
@@ -57,6 +59,7 @@ const DIALOG_ID_SET = new Set([
   DIALOG_IDS.dialogbtnend,
   DIALOG_IDS.acceptQuestBg,
   DIALOG_IDS.continueBtn,
+  DIALOG_IDS.acceptQuestBg2,
 ]);
 
 /** Default color for buttons when color data is unavailable */
@@ -257,8 +260,8 @@ export class DialogBoxReader {
   private brightnessCheckInProgress = false;
   /** Flag indicating we skipped a check while one was in progress - need to recheck */
   private recheckNeeded = false;
-  /** Store the latest renders for recheck */
-  private latestRenders: patchrs.RenderInvocation[] | null = null;
+  /** Minimum interval between brightness checks (ms) */
+  private lastBrightnessCheckTime = 0;
 
   constructor() {}
 
@@ -301,14 +304,16 @@ export class DialogBoxReader {
       return null;
     }
 
+    let renders: patchrs.RenderInvocation[] = [];
     try {
       // Capture renders for dialog detection
-      const renders = await this.captureRenders();
-      console.log(`[DialogBoxReader] Captured ${renders.length} renders for detection`);
+      renders = await this.captureRenders();
       return this.detectFromRenders(renders);
     } catch (e) {
       console.error("[DialogBoxReader] Error during detection:", e);
       return null;
+    } finally {
+      for (const r of renders) { try { r.dispose?.(); } catch (_) {} }
     }
   }
 
@@ -412,20 +417,14 @@ export class DialogBoxReader {
 
       // If we found buttons, capture each button's pixels async to check pressed state
       if (result && result.buttons.length > 0) {
-        // Store latest renders for potential recheck
-        this.latestRenders = renders;
-
-        const buttonTexts = result.buttons.map(b => b.text.substring(0, 20)).join(', ');
-
-        if (!this.brightnessCheckInProgress) {
-          // No check in progress - start one
-          console.log(`[DialogBox] Starting brightness check for: ${buttonTexts}`);
+        const now = Date.now();
+        if (!this.brightnessCheckInProgress && now - this.lastBrightnessCheckTime >= 500) {
+          // No check in progress and enough time has passed - start one
+          this.lastBrightnessCheckTime = now;
           this.recheckNeeded = false;
           this.updatePressedStates(renders);
-        } else {
+        } else if (this.brightnessCheckInProgress) {
           // Check in progress - mark that we need to recheck when it finishes
-          // This ensures we don't miss clicks that happen during a check
-          console.log(`[DialogBox] Brightness check in progress, queueing recheck for: ${buttonTexts}`);
           this.recheckNeeded = true;
         }
       }
@@ -471,25 +470,12 @@ export class DialogBoxReader {
       // Transition detection is handled by the consumer (useGlQuestIntegration)
       // who knows which specific button is highlighted
 
-      // Debug: log which buttons we're checking
-      const buttonTexts = result.buttons.map(b => b.text.substring(0, 20)).join(', ');
-      console.log(`[DialogBox] Checking ${result.buttons.length} buttons: ${buttonTexts}`);
-
       for (const btn of result.buttons) {
         const { pressed, brightness } = await detectButtonPressedAsync(btn.bg);
 
         // Set button state: direct brightness detection only
         btn.pressed = pressed;
         btn.brightness = brightness;
-
-        // Log brightness for first button
-        if (btn === result.buttons[0]) {
-          console.log(`[DialogBox] "${btn.text.substring(0, 20)}" br=${brightness?.toFixed(3) ?? 'null'} pressed=${btn.pressed}`);
-        }
-
-        if (btn.pressed) {
-          console.log(`[DialogBox] Button "${btn.text}" PRESSED! br=${brightness?.toFixed(3)}`);
-        }
       }
 
       // Always fire callbacks with brightness data so consumer can do transition detection
@@ -506,22 +492,11 @@ export class DialogBoxReader {
       // Ignore errors - pressed detection is best-effort
     } finally {
       this.brightnessCheckInProgress = false;
-      console.log(`[DialogBox] Brightness check finished. recheckNeeded=${this.recheckNeeded}`);
 
-      // If frames were skipped while we were checking, immediately start another check
-      // This ensures we don't miss clicks that happen during a check cycle
-      if (this.recheckNeeded && this.latestRenders) {
-        const buttonTexts = this.lastResult?.buttons?.map(b => b.text.substring(0, 20)).join(', ') ?? 'none';
-        console.log(`[DialogBox] Triggering recheck for: ${buttonTexts}`);
+      // If frames were skipped while we were checking, the next stream frame (every ~150ms)
+      // will trigger a fresh check automatically. No need for manual recheck.
+      if (this.recheckNeeded) {
         this.recheckNeeded = false;
-        // Use setTimeout(0) to avoid deep recursion and allow other events to process
-        setTimeout(() => {
-          if (this.lastResult && this.lastResult.buttons.length > 0 && this.latestRenders) {
-            this.updatePressedStates(this.latestRenders);
-          } else {
-            console.log(`[DialogBox] Recheck skipped - no buttons in lastResult`);
-          }
-        }, 0);
       }
     }
   }
@@ -647,7 +622,8 @@ export function detectDialogBox(
     // Check for regular dialog button, accept quest button, OR continue button
     if (el.sprite.known?.id === DIALOG_IDS.dialogboxbtnbg ||
         el.sprite.known?.id === DIALOG_IDS.acceptQuestBg ||
-        el.sprite.known?.id === DIALOG_IDS.continueBtn) {
+        el.sprite.known?.id === DIALOG_IDS.continueBtn ||
+        (el.sprite.known?.id === DIALOG_IDS.acceptQuestBg2 && el.sprite.known?.subid === 0)) {
       bgSprites.push({
         x: el.x,
         y: el.y,
@@ -696,6 +672,7 @@ export function detectDialogBox(
   }
 
   // Search for button patterns
+  let foundContinueBtn = false;
   while (parser.index < parser.end) {
     // Full pattern: start (optional) -> bg -> end (optional) -> text
     let match = parser.searchUIPattern([
@@ -770,26 +747,105 @@ export function detectDialogBox(
 
       // Try CONTINUE button pattern (sprite 18635 - click to continue dialog)
       // This is just a sprite with no text - used to advance dialog
-      const continueMatch = parser.searchUIPattern([
-        { id: DIALOG_IDS.continueBtn, ref: "continueBtn" },
+      if (!foundContinueBtn) {
+        const continueMatch = parser.searchUIPattern([
+          { id: DIALOG_IDS.continueBtn, ref: "continueBtn" },
+        ]);
+
+        if (continueMatch) {
+          const continueEl = continueMatch.continueBtn.match;
+          const continueRect: ButtonRect = {
+            x: continueEl.x,
+            y: continueEl.y,
+            width: continueEl.width,
+            height: continueEl.height,
+          };
+
+          buttons.push({
+            text: "Click to continue",  // Fixed label - sprite has no text
+            start: null,
+            bg: continueRect,
+            end: null,
+            pressed: false, // Updated async via updatePressedStates
+            bgColor: (continueEl as any).color ?? DEFAULT_COLOR,
+          });
+          foundContinueBtn = true;
+          continue;
+        }
+      }
+
+      // Try ACCEPT QUEST button pattern 2 (sprite 60000, 3-part + text)
+      // Render order: subid 0 (bg), subid 1 (end), subid 2 (start)
+      const acceptMatch2 = parser.searchUIPattern([
+        { id: DIALOG_IDS.acceptQuestBg2, ref: "part0" },
+        { id: DIALOG_IDS.acceptQuestBg2, ref: "part1" },
+        { id: DIALOG_IDS.acceptQuestBg2, ref: "part2" },
+        { repeat: [0, 10] },
+        { string: "", ref: "btnText" },
       ]);
 
-      if (continueMatch) {
-        const continueEl = continueMatch.continueBtn.match;
-        const continueRect: ButtonRect = {
-          x: continueEl.x,
-          y: continueEl.y,
-          width: continueEl.width,
-          height: continueEl.height,
-        };
+      if (acceptMatch2) {
+        // part0 = subid 0 = background (used for press/brightness detection)
+        // part1 = subid 1 = end cap
+        // part2 = subid 2 = start cap
+        const bgMatch = acceptMatch2.part0.match;
+        const bgColor = bgSprites.find(
+          s => Math.abs(s.x - bgMatch.x) < 1 && Math.abs(s.y - bgMatch.y) < 1
+        )?.color ?? DEFAULT_COLOR;
 
+        const bgRect: ButtonRect = {
+          x: bgMatch.x,
+          y: bgMatch.y,
+          width: bgMatch.width,
+          height: bgMatch.height,
+        };
         buttons.push({
-          text: "Click to continue",  // Fixed label - sprite has no text
+          text: acceptMatch2.btnText.text,
+          start: {
+            x: acceptMatch2.part2.match.x,
+            y: acceptMatch2.part2.match.y,
+            width: acceptMatch2.part2.match.width,
+            height: acceptMatch2.part2.match.height,
+          },
+          bg: bgRect,
+          end: {
+            x: acceptMatch2.part1.match.x,
+            y: acceptMatch2.part1.match.y,
+            width: acceptMatch2.part1.match.width,
+            height: acceptMatch2.part1.match.height,
+          },
+          pressed: false,
+          bgColor,
+        });
+        continue;
+      }
+
+      // Also try simple pattern: just one 60000 sprite + text (fallback if not 3-part)
+      const acceptSimple2 = parser.searchUIPattern([
+        { id: DIALOG_IDS.acceptQuestBg2, ref: "btnBg" },
+        { repeat: [0, 10] },
+        { string: "", ref: "btnText" },
+      ]);
+
+      if (acceptSimple2) {
+        const bgMatch = acceptSimple2.btnBg.match;
+        const bgColor = bgSprites.find(
+          s => Math.abs(s.x - bgMatch.x) < 1 && Math.abs(s.y - bgMatch.y) < 1
+        )?.color ?? DEFAULT_COLOR;
+
+        const bgRect: ButtonRect = {
+          x: bgMatch.x,
+          y: bgMatch.y,
+          width: bgMatch.width,
+          height: bgMatch.height,
+        };
+        buttons.push({
+          text: acceptSimple2.btnText.text,
           start: null,
-          bg: continueRect,
+          bg: bgRect,
           end: null,
-          pressed: false, // Updated async via updatePressedStates
-          bgColor: (continueEl as any).color ?? DEFAULT_COLOR,
+          pressed: false,
+          bgColor,
         });
         continue;
       }

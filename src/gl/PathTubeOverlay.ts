@@ -415,7 +415,6 @@ async function findAnyFloorVAO(forceRefresh: boolean = false): Promise<number | 
 						continue;
 					}
 					state.knownFloorProgramId = render.program.programId;
-					console.log(`[PathTube] Found floor program: ${state.knownFloorProgramId}`);
 				} else {
 					if (render.program.programId !== state.knownFloorProgramId) continue;
 				}

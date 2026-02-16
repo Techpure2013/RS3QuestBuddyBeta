@@ -231,7 +231,6 @@ export class NpcOverlay {
     this.updateScreenSize();
 
     if (oldWidth !== this.screenWidth || oldHeight !== this.screenHeight) {
-      console.log(`[NpcOverlay] Resolution changed: ${oldWidth}x${oldHeight} -> ${this.screenWidth}x${this.screenHeight}`);
       // Clear VAO cache since VAO IDs may have changed
       this.clearVaoCache();
     }
@@ -285,9 +284,6 @@ export class NpcOverlay {
                 const totalMB = (memState.size / (1024 * 1024)).toFixed(1);
                 console.error(`[NpcOverlay] 🚨 CRITICAL: Shared memory at ${usedMB}/${totalMB}MB (${(pctUsed * 100).toFixed(1)}%) - attempting cleanup`);
                 patchrs.native.debug.resetOpenGlState().catch(() => {});
-              } else if (pctUsed > 0.8) {
-                const usedMB = (memState.used / (1024 * 1024)).toFixed(1);
-                console.warn(`[NpcOverlay] ⚠️ Shared memory high: ${usedMB}MB (${(pctUsed * 100).toFixed(1)}%)`);
               }
             }
 
@@ -330,9 +326,6 @@ export class NpcOverlay {
                 render.program.skipmask |= SKIP_PROGRAM_MASK;
                 continue;
               }
-
-              // Debug: Log framebuffer info for VAO matches to identify main vs shadow pass
-              console.log(`[NpcOverlay] VAO match: fb=${render.framebufferId}, colorTex=${render.framebufferColorTextureId}, depthTex=${render.framebufferDepthTextureId}, isShadow=${progmeta.isShadowRender}, vao=${render.vertexObjectId}`);
 
               const vertexCount = render.vertexArray.indexBuffer?.length || 0;
               const maxVertexCount = filter?.maxVertexCount ?? 10000;
@@ -426,8 +419,6 @@ export class NpcOverlay {
           }
         }
       );
-
-      console.log("[NpcOverlay] Streaming scan started", onGroups ? "(grouped mode)" : "(individual mode)");
     } catch (e) {
       onError?.(e instanceof Error ? e : new Error(String(e)));
     }
@@ -446,7 +437,6 @@ export class NpcOverlay {
         // Ignore errors when stopping
       }
       this.activeStream = null;
-      console.log("[NpcOverlay] Streaming scan stopped");
     }
   }
 
@@ -462,11 +452,8 @@ export class NpcOverlay {
     if (filter?.includeTextures) {
       features.push("textures");
     }
-    console.log("[NpcOverlay] Recording render calls...");
     const renders = await patchrs.native.recordRenderCalls({ maxframes: 1, features });
-    console.log("[NpcOverlay] Got", renders.length, "render calls");
     const result = this.scanFromRenders(renders, filter);
-    console.log("[NpcOverlay] scanFromRenders returned", result.length, "meshes");
     return result;
   }
 
@@ -599,21 +586,11 @@ export class NpcOverlay {
    * Useful for computing combined hashes that include body + weapons + accessories.
    */
   async scanGrouped(filter?: NpcFilter): Promise<NpcMeshGroup[]> {
-    // Log memory before scan
-    this.logMemoryStatus();
-
     // NOTE: Removed "textures" - TextureSnapshots are massive memory hogs (can be 500MB+)
     // Only use textures when explicitly needed for texture capture
     const features: ("vertexarray" | "uniforms")[] = ["vertexarray", "uniforms"];
-  
-    const renders = await patchrs.native.recordRenderCalls({ maxframes: 1, features });
 
-    // Check memory after capturing renders
-    const memState = patchrs.native.debug.memoryState();
-    if (memState && memState.used / memState.size > 0.8) {
-      const usedMB = (memState.used / (1024 * 1024)).toFixed(1);
-      console.warn(`[scanGrouped] ⚠️ Memory after capture: ${usedMB}MB (${((memState.used / memState.size) * 100).toFixed(1)}%)`);
-    }
+    const renders = await patchrs.native.recordRenderCalls({ maxframes: 1, features });
 
     return this.scanGroupedFromRenders(renders, filter);
   }
@@ -659,17 +636,14 @@ export class NpcOverlay {
     const seenVaoIds = new Set<number>();
     const programIdsFound = new Set<number>();
 
+    // Track original RenderInvocation objects for disposal after processing
+    const allOriginalFrameRenders: patchrs.RenderInvocation[][] = [];
+
     // Statistics tracking
     let totalRenderCalls = 0;
     let framesCaptured = 0;
     let consecutiveNoNewMeshes = 0;
     let earlyStopReason: string | undefined;
-
-    console.log(`[NpcOverlay] Starting ${isAggressive ? 'AGGRESSIVE' : 'normal'} scan (MEMORY-SAFE)...`);
-    console.log(`[NpcOverlay] Max frames: ${maxFrames}, delay: ${baseDelay}ms, early stop after ${noNewMeshThreshold} empty frames`);
-
-    // Log initial memory state
-    this.logMemoryStatus();
 
     // Small delay before first capture to ensure game is in a good state
     await new Promise(resolve => setTimeout(resolve, 50));
@@ -679,13 +653,12 @@ export class NpcOverlay {
     for (let attempt = 0; attempt < 3; attempt++) {  // Reduced from 5 to 3
       initialRenders = await patchrs.native.recordRenderCalls({ maxframes: 1, features: ["vertexarray", "uniforms"] });  // Removed "textures" to save memory
       if (initialRenders.length > 0) break;
-      console.log(`[NpcOverlay] Initial capture attempt ${attempt + 1} returned 0 renders, retrying...`);
       await new Promise(resolve => setTimeout(resolve, 50 + attempt * 50));
     }
+    allOriginalFrameRenders.push(initialRenders);
 
     framesCaptured++;
     totalRenderCalls += initialRenders.length;
-    console.log(`[NpcOverlay] Initial frame: ${initialRenders.length} render calls`);
 
     for (const render of initialRenders) {
       if (!seenVaoIds.has(render.vertexObjectId)) {
@@ -707,7 +680,6 @@ export class NpcOverlay {
     }
 
     const initialMeshCount = allRenders.length;
-    console.log(`[NpcOverlay] Initial unique meshes: ${initialMeshCount}`);
 
     // Capture additional frames with animation cycle detection
     for (let frame = 0; frame < maxFrames; frame++) {
@@ -717,6 +689,7 @@ export class NpcOverlay {
       await new Promise(resolve => setTimeout(resolve, delay));
 
       const frameRenders = await patchrs.native.recordRenderCalls({ maxframes: 1, features: ["vertexarray", "uniforms"] });
+      allOriginalFrameRenders.push(frameRenders);
       framesCaptured++;
       totalRenderCalls += frameRenders.length;
 
@@ -742,83 +715,72 @@ export class NpcOverlay {
 
       if (newMeshes > 0) {
         consecutiveNoNewMeshes = 0;
-        console.log(`[NpcOverlay] Frame ${frame + 2}: +${newMeshes} new meshes (total: ${allRenders.length})`);
       } else {
         consecutiveNoNewMeshes++;
 
         // Animation cycle detection: stop if no new meshes for threshold frames
         if (consecutiveNoNewMeshes >= noNewMeshThreshold) {
           earlyStopReason = `No new meshes for ${noNewMeshThreshold} consecutive frames (animation cycle complete)`;
-          console.log(`[NpcOverlay] ${earlyStopReason}`);
           break;
         }
       }
 
-      // Progress logging every 3 frames (reduced from 5)
+      // Check memory every 3 frames
       if ((frame + 1) % 3 === 0) {
-        const elapsed = ((performance.now() - startTime) / 1000).toFixed(1);
-        console.log(`[NpcOverlay] Progress: ${frame + 2}/${maxFrames + 1} frames, ${allRenders.length} unique meshes, ${elapsed}s elapsed`);
-
-        // Check memory every 3 frames
         const memState = patchrs.native.debug.memoryState();
         if (memState) {
           const pctUsed = memState.used / memState.size;
-          const usedMB = (memState.used / (1024 * 1024)).toFixed(1);
           if (pctUsed > 0.9) {
+            const usedMB = (memState.used / (1024 * 1024)).toFixed(1);
             console.error(`[NpcOverlay] 🚨 CRITICAL memory: ${usedMB}MB (${(pctUsed * 100).toFixed(1)}%) - stopping scan early`);
             earlyStopReason = `Memory critical (${(pctUsed * 100).toFixed(0)}%)`;
             break;
-          } else if (pctUsed > 0.7) {
-            console.warn(`[NpcOverlay] ⚠️ Memory: ${usedMB}MB (${(pctUsed * 100).toFixed(1)}%)`);
           }
         }
       }
     }
 
     // Final cleanup after capture loop
-    console.log(`[NpcOverlay] Post-capture cleanup...`);
     try {
       await patchrs.native.debug.resetOpenGlState();
-    } catch (e) {
-      console.warn(`[NpcOverlay] Post-capture cleanup failed:`, e);
+    } catch {
+      // Ignore cleanup errors
     }
 
     const captureTimeMs = performance.now() - startTime;
-    const newMeshesFromRetry = allRenders.length - initialMeshCount;
-
-    console.log(`[NpcOverlay] Capture complete: ${allRenders.length} unique meshes in ${(captureTimeMs / 1000).toFixed(2)}s`);
-    console.log(`[NpcOverlay] Found ${newMeshesFromRetry} additional meshes from multi-frame capture`);
-    console.log(`[NpcOverlay] Unique program IDs: ${programIdsFound.size}`);
 
     // Process all collected renders with fuzzy grouping
     // Cast MinimalRenderData to RenderInvocation - they share the essential fields
-    const allGroups = this.scanGroupedFromRenders(allRenders as unknown as patchrs.RenderInvocation[], filter);
-    const incomplete = this.getLastIncompletePositions();
+    try {
+      const allGroups = this.scanGroupedFromRenders(allRenders as unknown as patchrs.RenderInvocation[], filter);
+      const incomplete = this.getLastIncompletePositions();
 
-    // Compile statistics
-    const statistics: ScanStatistics = {
-      totalFramesCaptured: framesCaptured,
-      totalRenderCalls,
-      uniqueMeshesFound: allRenders.length,
-      groupsFormed: allGroups.length,
-      incompletePositions: incomplete.length,
-      captureTimeMs,
-      skippedByFilter: (this as any)._lastFilterStats || {
-        ui: 0, floor: 0, shadow: 0, noMatrix: 0, notMesh: 0, noVerts: 0
-      },
-      programIdsFound,
-      earlyStopReason,
-    };
+      // Compile statistics
+      const statistics: ScanStatistics = {
+        totalFramesCaptured: framesCaptured,
+        totalRenderCalls,
+        uniqueMeshesFound: allRenders.length,
+        groupsFormed: allGroups.length,
+        incompletePositions: incomplete.length,
+        captureTimeMs,
+        skippedByFilter: (this as any)._lastFilterStats || {
+          ui: 0, floor: 0, shadow: 0, noMatrix: 0, notMesh: 0, noVerts: 0
+        },
+        programIdsFound,
+        earlyStopReason,
+      };
 
-    // Store statistics for UI access
-    (this as any)._lastScanStatistics = statistics;
+      // Store statistics for UI access
+      (this as any)._lastScanStatistics = statistics;
 
-    console.log(`[NpcOverlay] Grouped into ${allGroups.length} NPC groups`);
-    if (incomplete.length > 0) {
-      console.log(`[NpcOverlay] ${incomplete.length} positions still incomplete (tint only)`);
+      return { groups: allGroups, incomplete, statistics };
+    } finally {
+      // Dispose all original RenderInvocation objects to free native GPU memory.
+      // The MinimalRenderData copies in allRenders have already been processed by scanGroupedFromRenders.
+      for (const frameRenders of allOriginalFrameRenders) {
+        for (const r of frameRenders) { try { r.dispose?.(); } catch (_) {} }
+      }
     }
-
-    return { groups: allGroups, incomplete, statistics };
   }
 
   /**
@@ -851,9 +813,6 @@ export class NpcOverlay {
     const targetZ = targetGroup.position.z;
     const targetRotation = targetGroup.mainMesh.rotation;
 
-    console.log(`[NpcOverlay] Rescanning position (${targetX.toFixed(2)}, ${targetY.toFixed(2)}, ${targetZ.toFixed(2)}) rot=${targetRotation.toFixed(2)}`);
-    console.log(`[NpcOverlay] Capturing ${frameCount} frames over ${(frameCount * frameDelay / 1000).toFixed(1)}s for full animation cycle...`);
-
     // Collect all unique meshes at this position across multiple frames
     const collectedMeshes: NpcMesh[] = [];
     const collectedRenders: patchrs.RenderInvocation[] = [];
@@ -872,8 +831,6 @@ export class NpcOverlay {
         collectedRenders.push(mesh.render);
       }
     }
-
-    console.log(`[NpcOverlay] Starting with ${collectedMeshes.length} meshes from original group`);
 
     // Capture multiple frames to catch all animation states
     for (let frame = 0; frame < frameCount; frame++) {
@@ -954,14 +911,7 @@ export class NpcOverlay {
         collectedMeshes.push(mesh);
         collectedRenders.push(render);
       }
-
-      if (newMeshes > 0) {
-        console.log(`[NpcOverlay] Frame ${frame + 1}/${frameCount}: +${newMeshes} new meshes (total: ${collectedMeshes.length})`);
-      }
     }
-
-    console.log(`[NpcOverlay] Rescan complete: ${collectedMeshes.length} total meshes (was ${targetGroup.allMeshes.length})`);
-    console.log(`[NpcOverlay] Checked ${totalRendersChecked} renders, skipped: pos=${skippedWrongPos}, rot=${skippedWrongRot}`);
 
     // Deduplicate meshes by position buffer hash
     const seenMeshHashes = new Set<number>();
@@ -978,8 +928,6 @@ export class NpcOverlay {
         uniqueRenders.push(collectedRenders[i]);
       }
     }
-
-    console.log(`[NpcOverlay] After dedup: ${uniqueMeshes.length} unique meshes (${collectedMeshes.length - uniqueMeshes.length} duplicates removed)`);
 
     // Find the best main mesh (with bones, or largest)
     let mainMesh = uniqueMeshes.find(m => m.hasBones && m.progmeta.isMainMesh);
@@ -1021,10 +969,6 @@ export class NpcOverlay {
       // Skip UI and floor
       if (progmeta.isUi) { skippedUi++; continue; }
       if (filter?.excludeFloor !== false && progmeta.isFloor) {
-        // Log first few skipped floors that have bones (might be NPCs)
-        if (progmeta.uBones && skippedFloor < 3) {
-          console.log(`[NpcOverlay] Skipping as floor but has bones! verts:${render.vertexArray.indexBuffer?.length || 0}`);
-        }
         skippedFloor++;
         continue;
       }
@@ -1138,10 +1082,6 @@ export class NpcOverlay {
       noVerts: skippedNoVerts,
     };
 
-    // Log filter statistics
-    console.log(`[NpcOverlay] Filter stats: ${renders.length} renders → ${accepted} accepted (UI:${skippedUi}, Floor:${skippedFloor}, Shadow:${skippedShadow}, NoMatrix:${skippedNoMatrix}, NotMesh:${skippedNotMesh}, NoVerts:${skippedNoVerts})`);
-    console.log(`[NpcOverlay] Grouped into ${groups.size} position groups`);
-
     // Convert to NpcMeshGroup array and track incomplete positions
     const result: NpcMeshGroup[] = [];
     const incomplete: IncompletePosition[] = [];
@@ -1220,11 +1160,6 @@ export class NpcOverlay {
         continue;
       }
 
-      // Log NPCs with many meshes kept due to bones
-      if (groupHasBones && hasTooManyMeshes) {
-        console.log(`[NpcOverlay] Keeping NPC with bones: ${uniqueMeshes.length} meshes, ${totalVertexCount} verts (would be filtered without bones)`);
-      }
-
       // Use the main mesh from unique meshes if it was deduplicated
       if (!uniqueMeshes.includes(mainMesh)) {
         mainMesh = uniqueMeshes.find(m => m.hasBones && m.progmeta.isMainMesh) ||
@@ -1241,13 +1176,6 @@ export class NpcOverlay {
         modelMatrix: group.matrix,
         framebufferId: mainMesh.framebufferId,
       });
-    }
-
-    // Count NPCs with many meshes in results
-    const manyMeshNpcs = result.filter(g => g.meshCount > maxMeshCount && g.allMeshes.some(m => m.hasBones));
-    console.log(`[NpcOverlay] Groups: ${groupsWithBones} valid NPCs (bones or mainMesh), ${groupsNoBones} skipped (tint-only or non-NPC), ${incomplete.length} incomplete`);
-    if (manyMeshNpcs.length > 0) {
-      console.log(`[NpcOverlay] Kept ${manyMeshNpcs.length} NPCs with many meshes (bones override filter): ${manyMeshNpcs.map(g => `${g.meshCount}m`).join(', ')}`);
     }
 
     // Sort by distance from screen center (closest first)
@@ -1283,8 +1211,6 @@ export class NpcOverlay {
       size = 0.4,
     } = options;
 
-    console.log("[NpcOverlay] highlightNpc called with vaoId:", npc.vaoId, "options:", options);
-
     const colorTuple = toColorTuple(color);
     const progmeta = npc.progmeta;
 
@@ -1298,8 +1224,6 @@ export class NpcOverlay {
       console.error("[NpcOverlay] NPC program missing required uniforms. uViewProjMatrix:", !!uViewProjMatrix, "uModelMatrix:", !!progmeta.uModelMatrix);
       return null;
     }
-
-    console.log("[NpcOverlay] Creating highlight overlay with radius:", size, "thickness:", thickness);
 
     const radius = size * tilesize;
     const t = thickness * tilesize;
@@ -1380,7 +1304,6 @@ export class NpcOverlay {
     );
 
     try {
-      console.log("[NpcOverlay] Calling beginOverlay with vertexObjectId:", npc.vaoId);
       const handle = await patchrs.native.beginOverlay(
         { vertexObjectId: npc.vaoId },
         program,
@@ -1394,7 +1317,6 @@ export class NpcOverlay {
           trigger: "after",
         }
       );
-      console.log("[NpcOverlay] beginOverlay returned handle:", handle);
       this.overlayHandles.push(handle);
       return handle;
     } catch (e) {
@@ -1597,10 +1519,8 @@ export class NpcOverlay {
 
       // Convert from world units to tiles and add some padding
       const heightInTiles = maxY / tilesize + 0.5;
-      console.log(`[NpcOverlay] Estimated NPC height: ${heightInTiles.toFixed(2)} tiles (maxY: ${maxY.toFixed(0)})`);
       return Math.max(2.5, heightInTiles); // Minimum 2.5 tiles
-    } catch (e) {
-      console.warn("[NpcOverlay] Failed to estimate NPC height:", e);
+    } catch {
       return 2.5;
     }
   }
@@ -1844,12 +1764,16 @@ export class NpcOverlay {
     options?: { color?: RGBA | [number, number, number, number]; size?: number; height?: number; segments?: number }
   ): Promise<patchrs.GlOverlay[]> {
     const npcs = await this.scan(filter);
-    const handles: patchrs.GlOverlay[] = [];
-    for (const npc of npcs) {
-      const handle = await this.draw3DArrowAboveNpc(npc, options);
-      if (handle !== null) handles.push(handle);
+    try {
+      const handles: patchrs.GlOverlay[] = [];
+      for (const npc of npcs) {
+        const handle = await this.draw3DArrowAboveNpc(npc, options);
+        if (handle !== null) handles.push(handle);
+      }
+      return handles;
+    } finally {
+      for (const npc of npcs) { try { npc.render?.dispose?.(); } catch (_) {} }
     }
-    return handles;
   }
 
   async drawArrowsAboveAll(
@@ -1857,22 +1781,30 @@ export class NpcOverlay {
     options?: { color?: RGBA | [number, number, number, number]; size?: number; height?: number }
   ): Promise<patchrs.GlOverlay[]> {
     const npcs = await this.scan(filter);
-    const handles: patchrs.GlOverlay[] = [];
-    for (const npc of npcs) {
-      const handle = await this.drawArrowAboveNpc(npc, options);
-      if (handle !== null) handles.push(handle);
+    try {
+      const handles: patchrs.GlOverlay[] = [];
+      for (const npc of npcs) {
+        const handle = await this.drawArrowAboveNpc(npc, options);
+        if (handle !== null) handles.push(handle);
+      }
+      return handles;
+    } finally {
+      for (const npc of npcs) { try { npc.render?.dispose?.(); } catch (_) {} }
     }
-    return handles;
   }
 
   async highlightAll(filter?: NpcFilter, options?: NpcOverlayOptions): Promise<patchrs.GlOverlay[]> {
     const npcs = await this.scan(filter);
-    const handles: patchrs.GlOverlay[] = [];
-    for (const npc of npcs) {
-      const handle = await this.highlightNpc(npc, options);
-      if (handle !== null) handles.push(handle);
+    try {
+      const handles: patchrs.GlOverlay[] = [];
+      for (const npc of npcs) {
+        const handle = await this.highlightNpc(npc, options);
+        if (handle !== null) handles.push(handle);
+      }
+      return handles;
+    } finally {
+      for (const npc of npcs) { try { npc.render?.dispose?.(); } catch (_) {} }
     }
-    return handles;
   }
 
   async highlightByVertexCount(vertexCount: number | number[], options?: NpcOverlayOptions): Promise<patchrs.GlOverlay[]> {
@@ -1890,18 +1822,19 @@ export class NpcOverlay {
    * Required for NPCs like Death with 35 meshes where combined hash needs all parts.
    */
   private async findByHashStreaming(targetHashNum: number, maxFrames: number = 15): Promise<{ mesh: NpcMesh; group: NpcMeshGroup } | null> {
-    const { extractBufferHashes, computeCombinedHash, toHexHash } = await import("./npcBufferHash");
-
-    console.log(`[NpcOverlay] Hash search for ${toHexHash(targetHashNum)}...`);
+    const { extractBufferHashes, computeCombinedHash } = await import("./npcBufferHash");
 
     // Accumulate meshes at each position across frames (key: posKey, value: vaoId -> render)
     const positionMeshes = new Map<string, Map<number, patchrs.RenderInvocation>>();
+    // Track all frame renders for disposal (includes both stored and filtered-out renders)
+    const allFrameRenders: patchrs.RenderInvocation[][] = [];
     let framesWithNoNew = 0;
 
     for (let frame = 0; frame < maxFrames; frame++) {
       if (frame > 0) await new Promise(r => setTimeout(r, 60));
 
       const renders = await patchrs.native.recordRenderCalls({ maxframes: 1, features: ["vertexarray", "uniforms"] });
+      allFrameRenders.push(renders);
       let newMeshes = 0;
 
       for (const render of renders) {
@@ -1924,36 +1857,32 @@ export class NpcOverlay {
         if (++framesWithNoNew >= 3) break;
       } else {
         framesWithNoNew = 0;
-        console.log(`[NpcOverlay] Frame ${frame + 1}: +${newMeshes} meshes`);
       }
     }
 
-    // Compute hashes for all positions with accumulated meshes
-    console.log(`[NpcOverlay] Computing hashes for ${positionMeshes.size} positions...`);
+    try {
+      for (const [posKey, meshMap] of positionMeshes) {
+        const groupRenders = Array.from(meshMap.values());
+        const combined = computeCombinedHash(groupRenders);
 
-    for (const [posKey, meshMap] of positionMeshes) {
-      const groupRenders = Array.from(meshMap.values());
-      const combined = computeCombinedHash(groupRenders);
-
-      if (combined.num === targetHashNum) {
-        console.log(`[NpcOverlay] MATCH! ${posKey}, ${groupRenders.length} meshes`);
-        return this.buildGroupFromRenders(groupRenders);
-      }
-
-      for (const render of groupRenders) {
-        if (extractBufferHashes(render).posBufferHashNum === targetHashNum) {
-          console.log(`[NpcOverlay] MATCH! Individual at ${posKey}`);
+        if (combined.num === targetHashNum) {
           return this.buildGroupFromRenders(groupRenders);
         }
+
+        for (const render of groupRenders) {
+          if (extractBufferHashes(render).posBufferHashNum === targetHashNum) {
+            return this.buildGroupFromRenders(groupRenders);
+          }
+        }
+      }
+
+      return null;
+    } finally {
+      // Dispose all render invocations from all frames to free native GPU memory
+      for (const frameRenders of allFrameRenders) {
+        for (const r of frameRenders) { try { r.dispose?.(); } catch (_) {} }
       }
     }
-
-    // Debug: show what we found
-    const samples = Array.from(positionMeshes.entries()).slice(0, 5)
-      .map(([k, m]) => `${k}(${m.size}m):${computeCombinedHash(Array.from(m.values())).hex}`);
-    console.log(`[NpcOverlay] Sample hashes:`, samples);
-
-    return null;
   }
 
   /**
@@ -2044,8 +1973,6 @@ export class NpcOverlay {
   async highlightByBufferHash(bufferHash: string, options?: NpcOverlayOptions): Promise<{ handle: patchrs.GlOverlay | null; npc: NpcMesh | null; group: NpcMeshGroup | null }> {
     const { fromHexHash, computeCombinedHash } = await import("./npcBufferHash");
 
-    console.log("[NpcOverlay] Scanning for NPC with buffer hash:", bufferHash);
-
     // Parse target hash to number for fast comparison
     const targetHashNum = fromHexHash(bufferHash);
 
@@ -2055,20 +1982,22 @@ export class NpcOverlay {
       // maxMeshCount defaults to 15 - groups with >15 meshes filtered unless they have bones
     });
 
-    console.log(`[NpcOverlay] Scanned ${groups.length} groups, searching for hash ${bufferHash}...`);
+    try {
+      // Search for matching combined hash
+      for (const group of groups) {
+        const combined = computeCombinedHash(group.renders);
+        if (combined.num === targetHashNum) {
+          const handle = await this.highlightNpc(group.mainMesh, options);
+          return { handle, npc: group.mainMesh, group };
+        }
+      }
 
-    // Search for matching combined hash
-    for (const group of groups) {
-      const combined = computeCombinedHash(group.renders);
-      if (combined.num === targetHashNum) {
-        console.log(`[NpcOverlay] Found NPC! Meshes: ${group.meshCount}, Vertices: ${group.totalVertexCount}`);
-        const handle = await this.highlightNpc(group.mainMesh, options);
-        return { handle, npc: group.mainMesh, group };
+      return { handle: null, npc: null, group: null };
+    } finally {
+      for (const group of groups) {
+        for (const r of group.renders) { try { (r as any).dispose?.(); } catch (_) {} }
       }
     }
-
-    console.log("[NpcOverlay] No NPC found with buffer hash:", bufferHash);
-    return { handle: null, npc: null, group: null };
   }
 
   /**
@@ -2086,7 +2015,6 @@ export class NpcOverlay {
       return null;
     }
 
-    console.log(`[NpcOverlay] Cache hit for ${bufferHash}: VAO ${cached.vaoId}, fb ${cached.framebufferId}`);
     return { vaoId: cached.vaoId, framebufferId: cached.framebufferId };
   }
 
@@ -2098,16 +2026,13 @@ export class NpcOverlay {
    */
   updateVaoCache(bufferHash: string, vaoId: number, framebufferId: number): void {
     this.vaoCache.set(bufferHash, { vaoId, framebufferId, timestamp: Date.now() });
-    console.log(`[NpcOverlay] Cache updated for ${bufferHash}: VAO ${vaoId}, fb ${framebufferId}`);
   }
 
   /**
    * Clear the VAO cache (call when NPCs may have changed, e.g., area transition)
    */
   clearVaoCache(): void {
-    const size = this.vaoCache.size;
     this.vaoCache.clear();
-    console.log(`[NpcOverlay] Cache cleared (${size} entries)`);
   }
 
   /**
@@ -2124,11 +2049,6 @@ export class NpcOverlay {
   ): Promise<{ handle: patchrs.GlOverlay | null; npc: NpcMesh | null; group: NpcMeshGroup | null }> {
     const { fromHexHash, computeCombinedHash } = await import("./npcBufferHash");
 
-    console.log("[NpcOverlay] Scanning for NPC with buffer hash (arrow):", bufferHash);
-    if (filter?.playerPosition) {
-      console.log(`[NpcOverlay] Using player position filter: (${filter.playerPosition.x.toFixed(1)}, ${filter.playerPosition.z.toFixed(1)}), max dist: ${filter.maxDistanceFromPlayer ?? 50}`);
-    }
-
     // Parse target hash to number for fast comparison
     const targetHashNum = fromHexHash(bufferHash);
 
@@ -2140,24 +2060,25 @@ export class NpcOverlay {
       maxDistanceFromPlayer: filter?.maxDistanceFromPlayer,
     });
 
-    console.log(`[NpcOverlay] Scanned ${groups.length} groups, searching for hash ${bufferHash}...`);
+    try {
+      // Search for matching combined hash
+      for (const group of groups) {
+        const combined = computeCombinedHash(group.renders);
+        if (combined.num === targetHashNum) {
+          // Update cache for fast future lookups
+          this.updateVaoCache(bufferHash, group.mainMesh.vaoId, group.mainMesh.framebufferId);
 
-    // Search for matching combined hash
-    for (const group of groups) {
-      const combined = computeCombinedHash(group.renders);
-      if (combined.num === targetHashNum) {
-        console.log(`[NpcOverlay] Found NPC! Meshes: ${group.meshCount}, Vertices: ${group.totalVertexCount}`);
+          const handle = await this.draw3DArrowAboveNpc(group.mainMesh, options);
+          return { handle, npc: group.mainMesh, group };
+        }
+      }
 
-        // Update cache for fast future lookups
-        this.updateVaoCache(bufferHash, group.mainMesh.vaoId, group.mainMesh.framebufferId);
-
-        const handle = await this.draw3DArrowAboveNpc(group.mainMesh, options);
-        return { handle, npc: group.mainMesh, group };
+      return { handle: null, npc: null, group: null };
+    } finally {
+      for (const group of groups) {
+        for (const r of group.renders) { try { (r as any).dispose?.(); } catch (_) {} }
       }
     }
-
-    console.log("[NpcOverlay] No NPC found with buffer hash:", bufferHash);
-    return { handle: null, npc: null, group: null };
   }
 
   /**
@@ -2178,11 +2099,8 @@ export class NpcOverlay {
 
     // Don't search if using placeholder hash
     if (hashToFind === "0x00000000") {
-      console.log("[NpcOverlay] Player hash not configured. Set PLAYER_BUFFER_HASH or pass a hash to findPlayer()");
       return null;
     }
-
-    console.log("[NpcOverlay] Searching for player with hash:", hashToFind);
 
     const targetHashNum = fromHexHash(hashToFind);
 
@@ -2191,20 +2109,24 @@ export class NpcOverlay {
       excludeFloor: true,
     });
 
-    for (const group of groups) {
-      const combined = computeCombinedHash(group.renders);
-      if (combined.num === targetHashNum) {
-        console.log(`[NpcOverlay] Found player at position: (${group.position.x.toFixed(2)}, ${group.position.y.toFixed(2)}, ${group.position.z.toFixed(2)})`);
-        return {
-          position: group.position,
-          group,
-          combinedHash: combined.hex,
-        };
+    try {
+      for (const group of groups) {
+        const combined = computeCombinedHash(group.renders);
+        if (combined.num === targetHashNum) {
+          return {
+            position: group.position,
+            group,
+            combinedHash: combined.hex,
+          };
+        }
+      }
+
+      return null;
+    } finally {
+      for (const group of groups) {
+        for (const r of group.renders) { try { (r as any).dispose?.(); } catch (_) {} }
       }
     }
-
-    console.log("[NpcOverlay] Player not found with hash:", hashToFind);
-    return null;
   }
 
   /**
@@ -2227,62 +2149,67 @@ export class NpcOverlay {
     const hashToFind = playerHash ?? PLAYER_BUFFER_HASH;
     const targetHashNum = hashToFind !== "0x00000000" ? fromHexHash(hashToFind) : 0;
 
-    console.log("[NpcOverlay] Scanning with player reference...");
-
     const groups = await this.scanGrouped({
       excludeFloor: true,
     });
 
-    let playerData: { position: { x: number; y: number; z: number }; group: NpcMeshGroup } | null = null;
-    const npcs: Array<{
-      group: NpcMeshGroup;
-      combinedHash: string;
-      relativePosition: { x: number; y: number; z: number } | null;
-    }> = [];
+    try {
+      let playerData: { position: { x: number; y: number; z: number }; group: NpcMeshGroup } | null = null;
+      const npcs: Array<{
+        group: NpcMeshGroup;
+        combinedHash: string;
+        relativePosition: { x: number; y: number; z: number } | null;
+      }> = [];
 
-    // First pass: find player and collect all NPCs
-    for (const group of groups) {
-      const combined = computeCombinedHash(group.renders);
+      // First pass: find player and collect all NPCs
+      for (const group of groups) {
+        const combined = computeCombinedHash(group.renders);
 
-      // Check if this is the player
-      if (targetHashNum !== 0 && combined.num === targetHashNum) {
-        playerData = {
-          position: group.position,
+        // Check if this is the player
+        if (targetHashNum !== 0 && combined.num === targetHashNum) {
+          playerData = {
+            position: group.position,
+            group,
+          };
+        }
+
+        npcs.push({
           group,
-        };
-        console.log(`[NpcOverlay] Found player at: (${group.position.x.toFixed(2)}, ${group.position.y.toFixed(2)}, ${group.position.z.toFixed(2)})`);
+          combinedHash: combined.hex,
+          relativePosition: null, // Will be calculated after finding player
+        });
       }
 
-      npcs.push({
-        group,
-        combinedHash: combined.hex,
-        relativePosition: null, // Will be calculated after finding player
-      });
-    }
+      // Second pass: calculate relative positions if player was found
+      if (playerData) {
+        for (const npc of npcs) {
+          npc.relativePosition = {
+            x: npc.group.position.x - playerData.position.x,
+            y: npc.group.position.y - playerData.position.y,
+            z: npc.group.position.z - playerData.position.z,
+          };
+        }
+      }
 
-    // Second pass: calculate relative positions if player was found
-    if (playerData) {
-      for (const npc of npcs) {
-        npc.relativePosition = {
-          x: npc.group.position.x - playerData.position.x,
-          y: npc.group.position.y - playerData.position.y,
-          z: npc.group.position.z - playerData.position.z,
-        };
+      return { player: playerData, npcs };
+    } finally {
+      for (const group of groups) {
+        for (const r of group.renders) { try { (r as any).dispose?.(); } catch (_) {} }
       }
     }
-
-    console.log(`[NpcOverlay] Scanned ${npcs.length} entities, player ${playerData ? 'found' : 'not found'}`);
-
-    return { player: playerData, npcs };
   }
 
   async getVertexCountStats(): Promise<Map<number, number>> {
     const npcs = await this.scan({ excludeFloor: true });
-    const counts = new Map<number, number>();
-    for (const npc of npcs) {
-      counts.set(npc.vertexCount, (counts.get(npc.vertexCount) || 0) + 1);
+    try {
+      const counts = new Map<number, number>();
+      for (const npc of npcs) {
+        counts.set(npc.vertexCount, (counts.get(npc.vertexCount) || 0) + 1);
+      }
+      return counts;
+    } finally {
+      for (const npc of npcs) { try { npc.render?.dispose?.(); } catch (_) {} }
     }
-    return counts;
   }
 
   captureTexture(npc: NpcMesh, textureIndex: number = 0): ImageData | null {
@@ -2336,12 +2263,11 @@ export class NpcOverlay {
   }
 
   async stopAll(): Promise<void> {
-    console.log(`[NpcOverlay] stopAll - stopping ${this.overlayHandles.length} overlays`);
     for (const handle of this.overlayHandles) {
       try {
         handle.stop();
       } catch (e) {
-        console.warn(`[NpcOverlay] Failed to stop overlay:`, e);
+        console.error(`[NpcOverlay] Failed to stop overlay:`, e);
       }
     }
     this.overlayHandles = [];
@@ -2352,8 +2278,6 @@ export class NpcOverlay {
     } catch {
       // Ignore cleanup errors
     }
-
-    console.log("[NpcOverlay] All overlays stopped and memory cleaned");
   }
 
   getActiveCount(): number {
@@ -2381,16 +2305,7 @@ export class NpcOverlay {
    * Log detailed memory status for debugging disconnects.
    */
   logMemoryStatus(): void {
-    const mem = this.getMemoryStatus();
-    if (!mem) {
-      console.log("[NpcOverlay] Memory: Not connected");
-      return;
-    }
-    const usedMB = (mem.used / (1024 * 1024)).toFixed(1);
-    const totalMB = (mem.size / (1024 * 1024)).toFixed(1);
-    const freeMB = (mem.free / (1024 * 1024)).toFixed(1);
-    const icon = mem.warning ? "⚠️" : "✓";
-    console.log(`[NpcOverlay] Memory: ${icon} ${usedMB}/${totalMB}MB used (${mem.pctUsed.toFixed(1)}%), ${freeMB}MB free`);
+    // Method kept for compatibility but logging removed for performance
   }
 
   /**
@@ -2398,10 +2313,7 @@ export class NpcOverlay {
    * This captures everything with a model matrix and logs detailed info about each mesh.
    */
   async debugDumpAllMeshes(): Promise<void> {
-    console.log("\n========== DEBUG: DUMPING ALL MESHES (NO FILTERING) ==========\n");
-
     const renders = await patchrs.native.recordRenderCalls({ maxframes: 1, features: ["vertexarray", "uniforms"] });
-    console.log(`[DEBUG] Total render calls: ${renders.length}`);
 
     const meshes: Array<{
       vaoId: number;
@@ -2454,23 +2366,6 @@ export class NpcOverlay {
     // Sort by vertex count descending
     meshes.sort((a, b) => b.verts - a.verts);
 
-    // Log the top 30 meshes by vertex count
-    console.log(`\n[DEBUG] Top 30 meshes by vertex count:`);
-    for (let i = 0; i < Math.min(30, meshes.length); i++) {
-      const m = meshes[i];
-      const flags = [
-        m.isMainMesh ? "MAIN" : "",
-        m.isTinted ? "TINT" : "",
-        m.hasBones ? "BONE" : "",
-        m.isLighted ? "LIT" : "",
-        m.isFloor ? "FLOOR" : "",
-        m.isParticles ? "PART" : "",
-        m.isShadow ? "SHAD" : "",
-      ].filter(f => f).join(",");
-
-      console.log(`  ${i+1}. verts:${m.verts} pos:(${m.x},${m.y},${m.z}) flags:[${flags}] defines:[${m.fragDefines.join(",")}]`);
-    }
-
     // Group by approximate position to find entities
     const posGroups = new Map<string, typeof meshes>();
     for (const m of meshes) {
@@ -2478,21 +2373,6 @@ export class NpcOverlay {
       if (!posGroups.has(key)) posGroups.set(key, []);
       posGroups.get(key)!.push(m);
     }
-
-    console.log(`\n[DEBUG] Mesh groups by position (${posGroups.size} unique positions):`);
-    const sortedGroups = Array.from(posGroups.entries())
-      .map(([pos, meshes]) => ({ pos, meshes, totalVerts: meshes.reduce((sum, m) => sum + m.verts, 0) }))
-      .sort((a, b) => b.totalVerts - a.totalVerts);
-
-    for (let i = 0; i < Math.min(15, sortedGroups.length); i++) {
-      const g = sortedGroups[i];
-      const hasMain = g.meshes.some(m => m.isMainMesh);
-      const hasBones = g.meshes.some(m => m.hasBones);
-      const allFloor = g.meshes.every(m => m.isFloor);
-      console.log(`  ${g.pos}: ${g.meshes.length} meshes, ${g.totalVerts} total verts, MAIN:${hasMain} BONES:${hasBones} ${allFloor ? "(all floor)" : ""}`);
-    }
-
-    console.log("\n========== END DEBUG DUMP ==========\n");
   }
 
   /**
@@ -2501,24 +2381,8 @@ export class NpcOverlay {
    * Note: Still skips floor to prevent memory exhaustion, but accepts everything else.
    */
   async scanAllUnfiltered(): Promise<NpcMeshGroup[]> {
-    console.log("\n========== UNFILTERED SCAN: Capturing ALL meshes (except floor) ==========\n");
-
-    // Log memory before scan
-    this.logMemoryStatus();
-
     // NOTE: Removed "textures" - TextureSnapshots are massive memory hogs (can grow to 500MB+)
     const renders = await patchrs.native.recordRenderCalls({ maxframes: 1, features: ["vertexarray", "uniforms"] });
-
-    // Check memory after capturing renders
-    const memState = patchrs.native.debug.memoryState();
-    if (memState) {
-      const pctUsed = memState.used / memState.size;
-      const usedMB = (memState.used / (1024 * 1024)).toFixed(1);
-      if (pctUsed > 0.8) {
-        console.warn(`[UNFILTERED] ⚠️ Memory after capture: ${usedMB}MB (${(pctUsed * 100).toFixed(1)}%)`);
-      }
-    }
-    console.log(`[UNFILTERED] Total render calls: ${renders.length}`);
 
     // Group by position (same logic as scanGroupedFromRenders but minimal filtering)
     const tolerance = 0.15;
@@ -2625,18 +2489,6 @@ export class NpcOverlay {
     const maxGroups = 50;
     const limitedResult = result.slice(0, maxGroups);
 
-    console.log(`[UNFILTERED] Skipped: ${skippedFloor} floor, ${skippedUi} UI`);
-    console.log(`[UNFILTERED] Created ${result.length} mesh groups (returning top ${limitedResult.length})`);
-    for (let i = 0; i < Math.min(15, limitedResult.length); i++) {
-      const g = limitedResult[i];
-      const hasMain = g.allMeshes.some(m => m.progmeta.isMainMesh);
-      const hasBones = g.allMeshes.some(m => m.hasBones);
-      const isTinted = g.allMeshes.some(m => m.progmeta.isTinted);
-      const isLighted = g.allMeshes.some(m => m.progmeta.isLighted);
-      console.log(`  ${i+1}. pos:(${g.position.x.toFixed(1)},${g.position.z.toFixed(1)}) ${g.meshCount} meshes, ${g.totalVertexCount} verts, MAIN:${hasMain} BONES:${hasBones} TINT:${isTinted} LIT:${isLighted}`);
-    }
-
-    console.log("\n========== END UNFILTERED SCAN ==========\n");
     return limitedResult;
   }
 

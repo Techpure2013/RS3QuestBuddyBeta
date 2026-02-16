@@ -703,14 +703,12 @@ async function findFloorProgram(): Promise<number | null> {
         for (const render of renders) {
             if (render.program.inputs.find(q => q.name === "aMaterialSettingsSlotXY3")) {
                 floorProgramId = render.program.programId;
-                console.log(`[TileOverlay] Found floor program ID: ${floorProgramId}`);
                 return floorProgramId;
             } else {
                 // Mark non-floor programs to skip
                 render.program.skipmask |= wrongProgramMask;
             }
         }
-        console.warn("[TileOverlay] Floor program not found");
         return null;
     } catch (e) {
         console.error("[TileOverlay] Error finding floor program:", e);
@@ -844,8 +842,6 @@ function createRectMeshAbsolute(
     v3 = writeVertex(maxLng - t, maxLat - t);
     index.push(v0, v1, v2, v0, v2, v3);
 
-    console.log(`[TileOverlay] Created rect mesh: ${pos.length / 3} vertices, ${index.length / 3} triangles`);
-    console.log(`[TileOverlay] World bounds: X [${minLng * TILE_SIZE}, ${maxLng * TILE_SIZE}], Z [${minLat * TILE_SIZE}, ${maxLat * TILE_SIZE}]`);
 
     return {
         pos: new Uint8Array(Float32Array.from(pos).buffer),
@@ -955,15 +951,9 @@ function findBestFloorRender(
     // Sort by Y ascending (lowest = floor 0)
     chunkRenders.sort((a, b) => a.modelY - b.modelY);
 
-    // Log ALL floor Y values for debugging
-    console.log(`[TileOverlay] Chunk (${targetChunkX}, ${targetChunkZ}) all floor Y values: [${chunkRenders.map(f => f.modelY.toFixed(0)).join(", ")}]`);
-    console.log(`[TileOverlay] Target floor requested: ${targetFloor}`);
-
     // Pick the floor matching targetFloor (clamped to available floors)
     const floorIndex = Math.min(targetFloor, chunkRenders.length - 1);
     const selected = chunkRenders[floorIndex];
-
-    console.log(`[TileOverlay] Selected floor index ${floorIndex} with modelY=${selected.modelY.toFixed(0)}`);
 
     return { render: selected.render, chunkX: selected.chunkX, chunkZ: selected.chunkZ };
 }
@@ -1070,8 +1060,6 @@ async function createMarkerOverlay(marker: RectMarker, floor: patchrs.RenderInvo
 
     const col = [r, g, b, a];
 
-    console.log(`[TileOverlay] Drawing tiles from (${minTileX}, ${minTileZ}) to (${maxTileX}, ${maxTileZ}), solidFill=${marker.solidFill}`);
-
     if (marker.solidFill) {
         // Solid fill: draw 2 triangles per tile to fill the entire surface
         for (let z = minTileZ; z <= maxTileZ; z++) {
@@ -1115,8 +1103,6 @@ async function createMarkerOverlay(marker: RectMarker, floor: patchrs.RenderInvo
             }
         }
     }
-
-    console.log(`[TileOverlay] Created mesh: ${pos.length / 3} vertices, ${indices.length / 3} triangles`);
 
     // Create program with lighting - EXACTLY like tilemarkers.ts floorOverlayProgram
     const uniforms = new UniformSnapshotBuilder({
@@ -1176,7 +1162,6 @@ async function createMarkerOverlay(marker: RectMarker, floor: patchrs.RenderInvo
     activeOverlays.set(overlayId, {
         description: `Rect (${marker.minLng.toFixed(1)},${marker.minLat.toFixed(1)}) to (${marker.maxLng.toFixed(1)},${marker.maxLat.toFixed(1)})`
     });
-    console.log(`[TileOverlay] Created overlay ${overlayId} on chunk (${chunkX}, ${chunkZ}), vertexObjectId ${floor.vertexObjectId}`);
 
     return overlayId;
 }
@@ -1186,8 +1171,6 @@ async function createMarkerOverlay(marker: RectMarker, floor: patchrs.RenderInvo
  */
 function ensureMarkerStream(): void {
     if (markerStream || !patchrs.native) return;
-
-    console.log("[TileOverlay] Starting marker stream");
 
     markerStream = patchrs.native.streamRenderCalls({
         features: ["uniforms"],
@@ -1226,7 +1209,6 @@ function ensureMarkerStream(): void {
                 const targetFloor = pending.marker.floor ?? 0;
                 const bestRender = findBestFloorRender(renders, cx, cz, targetFloor);
                 if (bestRender) {
-                    console.log(`[TileOverlay] Chunk ${chunkKey} visible, creating overlay (floor ${targetFloor})`);
                     pendingMarkers.delete(chunkKey);
                     const overlayId = await createMarkerOverlay(pending.marker, bestRender.render, bestRender.chunkX, bestRender.chunkZ);
                     pending.resolve(overlayId);
@@ -1243,7 +1225,6 @@ function stopMarkerStream(): void {
     if (markerStream) {
         markerStream.close();
         markerStream = null;
-        console.log("[TileOverlay] Stopped marker stream");
     }
 }
 
@@ -1263,9 +1244,6 @@ export async function addRectMarker(marker: RectMarker): Promise<patchrs.GlOverl
     const targetChunkX = Math.floor(centerLng / CHUNK_SIZE);
     const targetChunkZ = Math.floor(centerLat / CHUNK_SIZE);
 
-    console.log(`[TileOverlay] Adding rect at (${marker.minLng.toFixed(1)}, ${marker.minLat.toFixed(1)}) to (${marker.maxLng.toFixed(1)}, ${marker.maxLat.toFixed(1)})`);
-    console.log(`[TileOverlay] Target chunk: ${chunkKey}`);
-
     // First, try to find the chunk immediately
     try {
         const renders = await patchrs.native.recordRenderCalls({ maxframes: 1,
@@ -1284,7 +1262,6 @@ export async function addRectMarker(marker: RectMarker): Promise<patchrs.GlOverl
         const targetFloor = marker.floor ?? 0;
         const bestRender = findBestFloorRender(renders, targetChunkX, targetChunkZ, targetFloor);
         if (bestRender) {
-            console.log(`[TileOverlay] Found chunk immediately (floor ${targetFloor})`);
             return await createMarkerOverlay(marker, bestRender.render, bestRender.chunkX, bestRender.chunkZ);
         }
     } catch (e) {
@@ -1294,12 +1271,10 @@ export async function addRectMarker(marker: RectMarker): Promise<patchrs.GlOverl
     // Chunk not visible yet
     // If skipIfNotVisible is set, return null immediately (for path tiles)
     if (marker.skipIfNotVisible) {
-        console.log(`[TileOverlay] Chunk ${chunkKey} not visible, skipping (skipIfNotVisible=true)`);
         return null;
     }
 
     // Add to pending and start streaming
-    console.log(`[TileOverlay] Chunk ${chunkKey} not visible, waiting...`);
 
     return new Promise((resolve) => {
         pendingMarkers.set(chunkKey, { marker, resolve });
@@ -1544,10 +1519,6 @@ async function createNPCWanderOverlay(
     // NPC tile: bright red - very noticeable
     const npcCol = marker.npcColor ?? [255, 50, 50, 255];
 
-    const numTilesX = maxTileX - minTileX + 1;
-    const numTilesZ = maxTileZ - minTileZ + 1;
-    console.log(`[TileOverlay] NPC wander: ${numTilesX}x${numTilesZ} tiles, NPC at (${npcTileX},${npcTileZ})`);
-
     // Helper to check if a tile is in the wander area
     const isWanderTile = (x: number, z: number): boolean => {
         return x >= minTileX && x <= maxTileX && z >= minTileZ && z <= maxTileZ;
@@ -1690,8 +1661,6 @@ async function createNPCWanderOverlay(
         }
     }
 
-    console.log(`[TileOverlay] NPC wander barrier: ${pos.length / 3} vertices, ${indices.length / 3} triangles`);
-
     // Barrier shader with uTime for animated vertical wave effect
     const uniforms = new UniformSnapshotBuilder({
         uModelMatrix: "mat4",
@@ -1729,11 +1698,6 @@ async function createNPCWanderOverlay(
     const posBuffer = new Uint8Array(new Float32Array(pos).buffer);
     const colBuffer = Uint8Array.from(colorData);  // Like arrow does - direct conversion
 
-    // Debug: Log first few color values to verify they're correct
-    console.log(`[TileOverlay] Color data sample (first 8 values): [${colorData.slice(0, 8).join(', ')}]`);
-    console.log(`[TileOverlay] colBuffer sample: [${Array.from(colBuffer.slice(0, 8)).join(', ')}]`);
-    console.log(`[TileOverlay] marker.color: [${marker.color.join(', ')}]`);
-
     const vertex = patchrs.native.createVertexArray(indexBuffer, [
         { location: 0, buffer: posBuffer, enabled: true, normalized: false, offset: 0, scalartype: GL_FLOAT, stride: 3 * 4, vectorlength: 3 },
         { location: 6, buffer: colBuffer, enabled: true, normalized: true, offset: 0, scalartype: GL_UNSIGNED_BYTE, stride: 4, vectorlength: 4 }  // RGBA
@@ -1757,7 +1721,6 @@ async function createNPCWanderOverlay(
     );
 
     activeOverlays.set(overlayId, { description: `NPC wander barrier` });
-    console.log(`[TileOverlay] Created NPC wander overlay ${overlayId} on chunk (${chunkX}, ${chunkZ})`);
 
     return overlayId;
 }
@@ -1780,9 +1743,6 @@ export async function addNPCWanderMarker(marker: NPCWanderMarker): Promise<patch
     const targetChunkZ = Math.floor(centerLat / CHUNK_SIZE);
     const chunkKey = `${targetChunkX},${targetChunkZ}`;
 
-    console.log(`[TileOverlay] NPC wander area: bottomLeft(${bottomLeft.lat}, ${bottomLeft.lng}) to topRight(${topRight.lat}, ${topRight.lng})`);
-    console.log(`[TileOverlay] Target chunk: ${chunkKey}`);
-
     // Try to find the chunk immediately - use floor selection to pick ground level
     try {
         const renders = await patchrs.native.recordRenderCalls({ maxframes: 1,
@@ -1801,32 +1761,18 @@ export async function addNPCWanderMarker(marker: NPCWanderMarker): Promise<patch
         const targetFloor = marker.floor ?? 0;
         const bestRender = findBestFloorRender(renders, targetChunkX, targetChunkZ, targetFloor);
         if (bestRender) {
-            console.log(`[TileOverlay] Found chunk immediately for NPC wander`);
             return await createNPCWanderOverlay(marker, bestRender.render, bestRender.chunkX, bestRender.chunkZ);
         }
-
-        // Log what chunks ARE visible for debugging
-        const visibleChunks = new Set<string>();
-        for (const render of renders) {
-            if (!render.program.inputs.find(q => q.name === "aMaterialSettingsSlotXY3")) continue;
-            const chunkInfo = getChunkFromRender(render);
-            if (chunkInfo) {
-                visibleChunks.add(`${chunkInfo.chunkX},${chunkInfo.chunkZ}`);
-            }
-        }
-        console.log(`[TileOverlay] Target chunk ${chunkKey} NOT found. Visible chunks: [${Array.from(visibleChunks).join(", ")}]`);
     } catch (e) {
         console.warn("[TileOverlay] Error checking immediate renders for NPC wander:", e);
     }
 
     // If skipIfNotVisible is set, return null instead of waiting
     if (marker.skipIfNotVisible) {
-        console.log(`[TileOverlay] Chunk not visible for NPC wander, skipping (skipIfNotVisible=true)`);
         return null;
     }
 
     // Fall back to simple rect marker if chunk not found immediately
-    console.log(`[TileOverlay] Chunk not visible, falling back to rect marker`);
     return addRectMarker({
         minLat: bottomLeft.lat,
         minLng: bottomLeft.lng,
@@ -1884,15 +1830,10 @@ async function createObjectTilesBatchedOverlay(
             const parsed = parseHexColor(tile.color);
             if (parsed) {
                 color = parsed;
-                console.log(`[TileOverlay] Parsed hex color "${tile.color}" -> [${parsed.join(', ')}]`);
-            } else {
-                console.log(`[TileOverlay] Failed to parse hex color "${tile.color}", using default`);
             }
         }
         tileColors.set(key, color);
     }
-
-    console.log(`[TileOverlay] Tile group "${group.name}": ${group.tiles.length} tiles, defaultColor=[${group.defaultColor.join(', ')}]`);
 
     // Writevertex function
     const writevertex = (tilex: number, tilez: number, subx: number, subz: number, dy: number, vertcol: number[], rotation: number): number => {
@@ -2005,8 +1946,6 @@ async function createObjectTilesBatchedOverlay(
         }
     }
 
-    console.log(`[TileOverlay] Created batched object tiles: ${group.tiles.length} tiles, ${pos.length / 3} vertices, ${indices.length / 3} triangles`);
-
     // Create program with lighting
     const uniforms = new UniformSnapshotBuilder({
         uModelMatrix: "mat4",
@@ -2061,7 +2000,6 @@ async function createObjectTilesBatchedOverlay(
     activeOverlays.set(overlayId, {
         description: `ObjectTileGroup "${group.name}" (${group.tiles.length} tiles)`
     });
-    console.log(`[TileOverlay] Created batched overlay ${overlayId} for "${group.name}"`);
 
     return overlayId;
 }
@@ -2116,11 +2054,8 @@ async function createTextLabelOverlay(
     const textGeo = generateTextGeometry(text, centerX, centerZ, textHeight, charSize, textColor);
 
     if (textGeo.indices.length === 0) {
-        console.warn(`[TileOverlay] No geometry generated for text "${text}"`);
         return null;
     }
-
-    console.log(`[TileOverlay] Creating text label "${text}" at (${centerLat.toFixed(1)}, ${centerLng.toFixed(1)}) with ${textGeo.indices.length / 3} triangles`);
 
     // Use billboard shader for text - rotates to face camera
     const uniforms = new UniformSnapshotBuilder({
@@ -2178,7 +2113,6 @@ async function createTextLabelOverlay(
     activeOverlays.set(overlayId, {
         description: `TextLabel "${text}" at (${centerLat.toFixed(1)}, ${centerLng.toFixed(1)})`
     });
-    console.log(`[TileOverlay] Created text label overlay ${overlayId} for "${text}"`);
 
     return overlayId;
 }
@@ -2210,8 +2144,6 @@ export async function addObjectTilesBatched(group: ObjectTileGroup): Promise<pat
     const targetChunkX = Math.floor(centerLng / CHUNK_SIZE);
     const targetChunkZ = Math.floor(centerLat / CHUNK_SIZE);
 
-    console.log(`[TileOverlay] Adding batched object tiles "${group.name}": ${group.tiles.length} tiles, target chunk (${targetChunkX}, ${targetChunkZ})`);
-
     // Try to find the chunk immediately
     try {
         const renders = await patchrs.native.recordRenderCalls({ maxframes: 1,
@@ -2223,7 +2155,6 @@ export async function addObjectTilesBatched(group: ObjectTileGroup): Promise<pat
             if (render.program.inputs.find(q => q.name === "aMaterialSettingsSlotXY3")) {
                 const chunkInfo = getChunkFromRender(render);
                 if (chunkInfo && chunkInfo.chunkX === targetChunkX && chunkInfo.chunkZ === targetChunkZ) {
-                    console.log(`[TileOverlay] Found chunk immediately for batched tiles`);
                     const tileOverlayId = await createObjectTilesBatchedOverlay(group, render, chunkInfo.chunkX, chunkInfo.chunkZ);
 
                     // Create text labels - group tiles with same label and center text
@@ -2239,8 +2170,6 @@ export async function addObjectTilesBatched(group: ObjectTileGroup): Promise<pat
                             labelGroups.get(label)!.push({ lat: tile.lat, lng: tile.lng });
                         }
 
-                        console.log(`[TileOverlay] Creating ${labelGroups.size} unique text labels`);
-
                         // Create one label per unique text, centered on all tiles with that label
                         for (const [labelText, tiles] of labelGroups) {
                             try {
@@ -2253,8 +2182,6 @@ export async function addObjectTilesBatched(group: ObjectTileGroup): Promise<pat
                                 // Center of bounding box (tiles span from coord to coord+1)
                                 const centerLat = (minLat + maxLat + 1) / 2;
                                 const centerLng = (minLng + maxLng + 1) / 2;
-
-                                console.log(`[TileOverlay] Label "${labelText}": ${tiles.length} tiles, center at (${centerLat.toFixed(1)}, ${centerLng.toFixed(1)})`);
 
                                 await createTextLabelOverlay(
                                     labelText,
@@ -2282,8 +2209,6 @@ export async function addObjectTilesBatched(group: ObjectTileGroup): Promise<pat
     }
 
     // Chunk not visible - fall back to individual tile markers
-    console.log(`[TileOverlay] Chunk not visible for batched tiles, falling back to individual markers`);
-
     // Create individual markers (less efficient but works)
     for (const tile of group.tiles) {
         const color = tile.color ? (parseHexColor(tile.color) ?? group.defaultColor) : group.defaultColor;
@@ -2697,8 +2622,6 @@ export async function addPathTilesBatched(group: PathTileGroup): Promise<patchrs
         }
     }
 
-    console.log(`[TileOverlay] Path tiles: ${group.tiles.length} tiles across ${tilesByChunk.size} chunks`);
-
     // Get current render calls to find visible chunks
     try {
         const renders = await patchrs.native.recordRenderCalls({ maxframes: 1,
@@ -2720,8 +2643,6 @@ export async function addPathTilesBatched(group: PathTileGroup): Promise<patchrs
             }
         }
 
-        console.log(`[TileOverlay] Found ${visibleChunks.size} visible chunks`);
-
         // Create overlay for each chunk that has tiles and is visible
         for (const [chunkKey, tiles] of tilesByChunk) {
             const visible = visibleChunks.get(chunkKey);
@@ -2737,15 +2658,12 @@ export async function addPathTilesBatched(group: PathTileGroup): Promise<patchrs
                 if (overlayId !== null) {
                     overlayIds.push(overlayId);
                 }
-            } else if (!group.skipIfNotVisible) {
-                console.log(`[TileOverlay] Chunk ${chunkKey} not visible, skipping ${tiles.length} path tiles`);
             }
         }
     } catch (e) {
         console.warn("[TileOverlay] Error checking renders for path tiles:", e);
     }
 
-    console.log(`[TileOverlay] Created ${overlayIds.length} path tile overlays`);
     return overlayIds;
 }
 
@@ -2757,7 +2675,6 @@ export async function removeOverlay(overlay: patchrs.GlOverlay): Promise<void> {
         try {
             overlay.stop();
             activeOverlays.delete(overlay);
-            console.log(`[TileOverlay] Removed overlay`);
         } catch (e) {
             console.warn("[TileOverlay] Error removing overlay:", e);
         }
@@ -2771,7 +2688,6 @@ export async function clearAllOverlays(): Promise<void> {
     for (const overlay of activeOverlays.keys()) {
         await removeOverlay(overlay);
     }
-    console.log("[TileOverlay] Cleared all overlays");
 }
 
 /**
@@ -2785,7 +2701,6 @@ export function getActiveOverlayCount(): number {
  * Initialize
  */
 export function startFloorTracking(): { close: () => void } {
-    console.log("[TileOverlay] Initialized (programId trigger mode)");
     return { close: stopFloorTracking };
 }
 
@@ -2795,7 +2710,6 @@ export function startFloorTracking(): { close: () => void } {
 export function stopFloorTracking(): void {
     clearAllOverlays();
     floorProgramId = null;
-    console.log("[TileOverlay] Stopped");
 }
 
 /**

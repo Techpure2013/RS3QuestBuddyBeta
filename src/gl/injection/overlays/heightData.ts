@@ -44,18 +44,15 @@ export async function fetchHeightData(
     const fetchPromise = (async (): Promise<Uint16Array | null> => {
         try {
             const url = `${HEIGHT_DATA_ENDPOINT}height-${level}/${chunkX}-${chunkZ}.bin.gz`;
-            console.log(`[HeightData] Fetching ${url}`);
 
             const res = await fetch(url);
             if (!res.ok) {
-                console.warn(`[HeightData] Failed to fetch height data for chunk ${chunkX},${chunkZ}: ${res.status}`);
                 heightCache.set(key, null);
                 return null;
             }
 
             const data = new Uint16Array(await res.arrayBuffer());
             heightCache.set(key, data);
-            console.log(`[HeightData] Loaded height data for chunk ${chunkX},${chunkZ}`);
             return data;
         } catch (e) {
             console.error(`[HeightData] Error fetching height data:`, e);

@@ -237,8 +237,6 @@ const DEBUG_DISABLE_OBJECT_TILES = false;
  * UI overlays (SpriteOverlay) handle their own scaling via useGlQuestIntegration.
  */
 async function handleResolutionChange(info: UIScaleInfo): Promise<void> {
-	console.log(`[QuestOverlay] Resolution changed: ${info.screenWidth}x${info.screenHeight}, scaled: ${info.isScaled}`);
-
 	// Update npcOverlay screen dimensions (for future scans)
 	if (state.npcOverlay) {
 		state.npcOverlay.refreshScreenDimensions();
@@ -276,7 +274,6 @@ async function initOverlays(): Promise<boolean> {
 				// Configure which components are enabled
 				state.minimapOverlay.setArrowEnabled(state.minimapArrowEnabled);
 				state.minimapOverlay.setMarkerEnabled(state.minimapMarkerEnabled);
-				console.log("[QuestOverlay] Minimap direction overlay initialized (arrow:", state.minimapArrowEnabled, ", marker:", state.minimapMarkerEnabled, ")");
 			} catch (e) {
 				console.warn("[QuestOverlay] Failed to init minimap direction overlay:", e);
 			}
@@ -286,7 +283,6 @@ async function initOverlays(): Promise<boolean> {
 		if (state.hudCompassEnabled && !state.hudCompassOverlay) {
 			try {
 				state.hudCompassOverlay = await initHudCompassOverlay();
-				console.log("[QuestOverlay] HUD compass overlay initialized");
 			} catch (e) {
 				console.warn("[QuestOverlay] Failed to init HUD compass overlay:", e);
 			}
@@ -353,7 +349,6 @@ async function highlightNpcByHash(npc: NpcHighlight): Promise<OverlayHandle | nu
 			for (const hash of hashes) {
 				const cached = state.npcOverlay.getCachedVaoInfo(hash);
 				if (cached) {
-					console.log(`[QuestOverlay] Fast path: Using cached VAO ${cached.vaoId} for "${npc.npcName}"`);
 					try {
 						const compassOverlay = await drawNpcCompassRoseAttached(
 							cached.vaoId,
@@ -377,7 +372,6 @@ async function highlightNpcByHash(npc: NpcHighlight): Promise<OverlayHandle | nu
 							};
 						}
 					} catch (e) {
-						console.log(`[QuestOverlay] Cached VAO failed, clearing and falling back to scan`);
 						// Cache entry may be stale, will fall through to slow path
 					}
 				}
@@ -394,12 +388,10 @@ async function highlightNpcByHash(npc: NpcHighlight): Promise<OverlayHandle | nu
 
 			for (const hash of hashes) {
 				try {
-					console.log(`[QuestOverlay] Slow path: Scanning for NPC "${npc.npcName}" with hash ${hash}...`);
 					const result = await state.npcOverlay.arrowByBufferHash(hash, undefined, positionFilter);
 
 					if (result.npc) {
 						const framebufferId = result.group?.framebufferId ?? result.npc.framebufferId;
-						console.log(`[QuestOverlay] Found NPC "${npc.npcName}" at VAO ${result.npc.vaoId}, fb ${framebufferId}, attaching compass rose`);
 
 						// Stop the arrow overlay if one was created (we want compass rose instead)
 						if (result.handle) {
@@ -430,7 +422,7 @@ async function highlightNpcByHash(npc: NpcHighlight): Promise<OverlayHandle | nu
 						}
 					}
 				} catch (e) {
-					console.log(`[QuestOverlay] Hash ${hash} scan failed:`, e);
+					// Hash scan failed, try next
 				}
 			}
 		}
@@ -445,9 +437,6 @@ async function highlightNpcByHash(npc: NpcHighlight): Promise<OverlayHandle | nu
 			// Calculate center of wander radius bounds
 			targetLat = (npc.wanderRadius.bottomLeft.lat + npc.wanderRadius.topRight.lat) / 2;
 			targetLng = (npc.wanderRadius.bottomLeft.lng + npc.wanderRadius.topRight.lng) / 2;
-			console.log(`[QuestOverlay] Drawing floor compass rose for "${npc.npcName}" at wander radius center (${targetLat}, ${targetLng})${hasHashes ? '' : ' (no hashes)'}`);
-		} else {
-			console.log(`[QuestOverlay] Drawing floor compass rose for "${npc.npcName}" at spawn location (${targetLat}, ${targetLng})${hasHashes ? '' : ' (no hashes)'}`);
 		}
 
 		// Use floor-attached method with framebuffer filtering (avoids shadow pass double-render)
@@ -619,7 +608,6 @@ async function checkNpcVisibility(): Promise<void> {
 				// Check if framebuffer has changed
 				const currentFramebufferId = vaoFramebufferMap.get(overlay.vaoId)!;
 				if (overlay.framebufferId !== undefined && overlay.framebufferId !== currentFramebufferId) {
-					console.log(`[QuestOverlay] Framebuffer changed for NPC VAO ${overlay.vaoId}: ${overlay.framebufferId} -> ${currentFramebufferId}, re-attaching`);
 					await reattachWithNewFramebuffer(overlay, currentFramebufferId);
 				}
 			} else if (overlay.lastSeen && (now - overlay.lastSeen) > NPC_VISIBILITY_TIMEOUT) {
@@ -664,10 +652,8 @@ async function reattachWithNewFramebuffer(overlay: OverlayHandle, newFramebuffer
 		overlay.id = newOverlay;
 		overlay.framebufferId = newFramebufferId;
 		overlay.lastSeen = Date.now();
-		console.log(`[QuestOverlay] Re-attached "${npc.npcName}" with new framebuffer ${newFramebufferId}`);
 	} else {
 		// Failed to re-attach - switch to static
-		console.log(`[QuestOverlay] Failed to re-attach "${npc.npcName}", switching to static`);
 		await switchToStaticOverlay(overlay);
 	}
 }
@@ -681,8 +667,6 @@ async function switchToStaticOverlay(overlay: OverlayHandle): Promise<void> {
 	const npc = overlay.npcInfo;
 	const markerId = `npc-${npc.id ?? overlay.npcHash}`;
 	const floor = npc.floor ?? 0;
-
-	console.log(`[QuestOverlay] NPC "${npc.npcName}" left render distance, switching to static location`);
 
 	// Stop the VAO-attached overlay
 	if (overlay.id && typeof overlay.id !== "number") {
@@ -717,7 +701,6 @@ async function switchToStaticOverlay(overlay: OverlayHandle): Promise<void> {
 		overlay.vaoId = undefined;
 		overlay.framebufferId = undefined;
 		overlay.lastSeen = undefined;
-		console.log(`[QuestOverlay] Switched "${npc.npcName}" to static overlay`);
 	}
 }
 
@@ -768,7 +751,6 @@ async function tryReattachStaticOverlays(): Promise<void> {
 					overlay.vaoId = cached.vaoId;
 					overlay.framebufferId = cached.framebufferId;
 					overlay.lastSeen = Date.now();
-					console.log(`[QuestOverlay] Re-attached "${npc.npcName}" to VAO ${cached.vaoId} (from cache)`);
 					attached = true;
 					break;
 				}
@@ -819,7 +801,6 @@ async function tryReattachStaticOverlays(): Promise<void> {
 							overlay.vaoId = result.npc.vaoId;
 							overlay.framebufferId = framebufferId;
 							overlay.lastSeen = Date.now();
-							console.log(`[QuestOverlay] Re-attached "${npc.npcName}" to VAO ${result.npc.vaoId} (from scan)`);
 							attached = true;
 							break;
 						}
@@ -996,16 +977,11 @@ function stopProximityMonitoring(): void {
  */
 async function drawWanderRadiusFilled(npc: NpcHighlight): Promise<OverlayHandle | null> {
 	if (!npc.wanderRadius) {
-		console.log(`[QuestOverlay] No wanderRadius data for "${npc.npcName}"`);
 		return null;
 	}
 	if (!tileOverlayManager) {
-		console.log(`[QuestOverlay] tileOverlayManager not initialized`);
 		return null;
 	}
-
-	const { bottomLeft, topRight } = npc.wanderRadius;
-	console.log(`[QuestOverlay] Attempting wander radius for "${npc.npcName}" at (${bottomLeft.lat}-${topRight.lat}, ${bottomLeft.lng}-${topRight.lng}) floor ${npc.floor ?? 0}`);
 
 	try {
 		const overlayId = await tileOverlayManager.addNPCWanderMarker({
@@ -1020,10 +996,8 @@ async function drawWanderRadiusFilled(npc: NpcHighlight): Promise<OverlayHandle 
 		});
 
 		if (overlayId !== null) {
-			console.log(`[QuestOverlay] Wander radius created for "${npc.npcName}" with overlayId ${overlayId}`);
 			return { id: overlayId, type: "wander-radius" };
 		}
-		console.log(`[QuestOverlay] Wander radius returned null for "${npc.npcName}" (chunk not visible or other issue)`);
 		return null;
 	} catch (e) {
 		console.error(`[QuestOverlay] Error drawing wander radius for "${npc.npcName}":`, e);
@@ -1123,7 +1097,6 @@ export async function activateStepOverlays(
 	state.isActive = true;
 	state.onNpcFound = options?.onNpcFound;
 	state.compassOverlayEnabled = options?.compassOverlayEnabled ?? false;
-	console.log(`[QuestOverlay] activateStepOverlays - compassOverlayEnabled: ${state.compassOverlayEnabled}`);
 
 	const { npc: npcs, object: objects } = step.highlights;
 
@@ -1177,7 +1150,6 @@ export async function activateStepOverlays(
 	if ((state.minimapArrowEnabled || state.minimapMarkerEnabled) && state.minimapOverlay && (npcs.length > 0 || objects.length > 0)) {
 		state.minimapOverlay.setTargetsFromQuestStep(npcs, objects);
 		state.minimapOverlay.start(300); // Update every 300ms
-		console.log(`[QuestOverlay] Minimap direction started with ${npcs.length} NPCs and ${objects.length} objects`);
 	}
 
 	// Start HUD compass if enabled and we have targets
@@ -1197,7 +1169,6 @@ export async function activateStepOverlays(
 		if (targetLat !== undefined && targetLng !== undefined) {
 			state.hudCompassOverlay.setTarget(targetLat, targetLng);
 			state.hudCompassOverlay.setVisible(true);
-			console.log(`[QuestOverlay] HUD compass started pointing to (${targetLat}, ${targetLng})`);
 		}
 	}
 
@@ -1245,20 +1216,12 @@ export async function refreshOverlays(): Promise<void> {
 export async function retryPendingOverlays(): Promise<void> {
 	if (!state.isActive) return;
 
-	const wanderCount = state.pendingWanderNpcs.length;
-	const objectCount = state.pendingObjects.length;
-
-	if (wanderCount > 0 || objectCount > 0) {
-		console.log(`[QuestOverlay] retryPendingOverlays: ${wanderCount} wander, ${objectCount} objects pending`);
-	}
-
 	// Retry pending wander radius overlays
 	const stillPendingWander: NpcHighlight[] = [];
 	for (const npc of state.pendingWanderNpcs) {
 		const handle = await drawWanderRadiusFilled(npc);
 		if (handle) {
 			state.activeOverlays.push(handle);
-			console.log(`[QuestOverlay] Successfully created wander radius for "${npc.npcName}"`);
 		} else {
 			stillPendingWander.push(npc);
 		}
@@ -1531,7 +1494,6 @@ export async function setHudCompassEnabled(enabled: boolean): Promise<void> {
 		if (!state.hudCompassOverlay) {
 			try {
 				state.hudCompassOverlay = await initHudCompassOverlay();
-				console.log("[QuestOverlay] HUD compass overlay initialized (on enable)");
 			} catch (e) {
 				console.warn("[QuestOverlay] Failed to init HUD compass overlay:", e);
 				return;

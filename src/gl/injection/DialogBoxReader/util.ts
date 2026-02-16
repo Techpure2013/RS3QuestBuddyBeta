@@ -36,6 +36,11 @@ export const uiScaleState: UIScaleInfo = {
     uiFramebufferId: -1,
 };
 
+/** Minimum delay between render stream frame captures (ms).
+ * Lower = more responsive dialog detection but higher CPU/GPU cost.
+ * 150ms ≈ 7 checks/second — sufficient for dialog button detection. */
+const RENDER_STREAM_INTERVAL_MS = 150;
+
 // TODO make this into a lib function
 // turned out slightly more complicated because rs uses a different framebuffer for ui scaling
 export function renderStream(glapi: patchrs.Alt1GlClient, cb: (state: patchrs.RenderInvocation[]) => void) {
@@ -44,7 +49,7 @@ export function renderStream(glapi: patchrs.Alt1GlClient, cb: (state: patchrs.Re
         framebufferId: 0,
         // texturesnapshot populates 'samplers' with TextureSnapshot (has texid, width, height)
         // textures populates 'textures' with TrackedTexture (also has texid, width, height)
-        features: ["vertexarray", "uniforms", "textures", "texturesnapshot"]
+        features: ["vertexarray", "uniforms", "texturesnapshot"]
     }
     // implementation that doesnt pile up calls if the consumer is slow
     let closed = false;
@@ -54,32 +59,11 @@ export function renderStream(glapi: patchrs.Alt1GlClient, cb: (state: patchrs.Re
 
     // Helper to find the scaling texture from render data
     const findScalingTexture = (renders: patchrs.RenderInvocation[]): number | null => {
-        console.log(`[renderStream] Scanning ${renders.length} renders for UI scaler...`);
-
-        // Log program types for debugging
-        const progTypes: string[] = [];
         for (let render of renders) {
             let prog = getProgramMeta(render.program);
             if (prog.isUiScaler) {
-                progTypes.push('UiScaler');
-            } else if (prog.isUi) {
-                progTypes.push('Ui');
-            }
-        }
-        console.log(`[renderStream] Program types found: ${progTypes.join(', ') || 'none matching (total: ' + renders.length + ')'}`);
-
-        for (let render of renders) {
-            let prog = getProgramMeta(render.program);
-            if (prog.isUiScaler) {
-                // Debug: log full render object structure
-                console.log(`[renderStream] UiScaler render keys:`, Object.keys(render));
-                console.log(`[renderStream] UiScaler render.samplers:`, render.samplers);
-                console.log(`[renderStream] UiScaler render.textures:`, (render as any).textures);
-                console.log(`[renderStream] UiScaler render.textureBindings:`, (render as any).textureBindings);
-
                 // Try multiple possible property names for texture data
                 const samplers = render.samplers || (render as any).textures || (render as any).textureBindings || {};
-                console.log(`[renderStream] Found UiScaler program, samplers:`, Object.keys(samplers));
                 const sampler = Object.values(samplers)[0] as patchrs.TextureSnapshot | undefined;
                 if (sampler) {
                     // Update UI scale state
@@ -97,10 +81,7 @@ export function renderStream(glapi: patchrs.Alt1GlClient, cb: (state: patchrs.Re
                     uiScaleState.scaleY = screenHeight / uiHeight;
                     uiScaleState.scalingTextureId = sampler.texid;
 
-                    console.log(`[renderStream] Found UI scaler: texture ${sampler.texid}, UI ${uiWidth}x${uiHeight}, screen ${screenWidth}x${screenHeight}`);
                     return sampler.texid;
-                } else {
-                    console.log(`[renderStream] UiScaler has no sampler data`);
                 }
             }
         }
@@ -113,11 +94,15 @@ export function renderStream(glapi: patchrs.Alt1GlClient, cb: (state: patchrs.Re
             // This ensures we capture UI renders from the first frame
             try {
                 const initialRenders = await glapi.recordRenderCalls({ maxframes: 1, ...opts });
-                const foundTexture = findScalingTexture(initialRenders);
-                if (foundTexture !== null) {
-                    scalingtexture = foundTexture;
-                    lastScalerSeenFrame = 1;
-                    console.log(`[renderStream] Initial scan found scaling texture: ${scalingtexture}`);
+                try {
+                    const foundTexture = findScalingTexture(initialRenders);
+                    if (foundTexture !== null) {
+                        scalingtexture = foundTexture;
+                        lastScalerSeenFrame = 1;
+                        console.log(`[renderStream] Initial scan found scaling texture: ${scalingtexture}`);
+                    }
+                } finally {
+                    for (const r of initialRenders) { try { r.dispose?.(); } catch (_) {} }
                 }
             } catch (e) {
                 console.warn(`[renderStream] Initial scan failed:`, e);
@@ -133,7 +118,6 @@ export function renderStream(glapi: patchrs.Alt1GlClient, cb: (state: patchrs.Re
                     const firstUIRender = uiResults[0];
                     if (firstUIRender.framebufferId !== undefined && firstUIRender.framebufferId >= 0) {
                         uiScaleState.uiFramebufferId = firstUIRender.framebufferId;
-                        console.log(`[renderStream] Found UI framebuffer ID: ${uiScaleState.uiFramebufferId}`);
                     }
                 }
 
@@ -155,7 +139,6 @@ export function renderStream(glapi: patchrs.Alt1GlClient, cb: (state: patchrs.Re
 
                         // If texture changed, update it
                         if (sampler.texid !== scalingtexture) {
-                            console.log(`[renderStream] Scaling texture changed: ${scalingtexture} -> ${sampler.texid}`);
                             scalingtexture = sampler.texid;
                         }
 
@@ -186,7 +169,6 @@ export function renderStream(glapi: patchrs.Alt1GlClient, cb: (state: patchrs.Re
                     if (uiScaleState.isScaled ||
                         uiScaleState.screenWidth !== screenWidth ||
                         uiScaleState.screenHeight !== screenHeight) {
-                        console.log(`[renderStream] No scaler for ${frameCount - lastScalerSeenFrame} frames, resetting to native`);
                         uiScaleState.isScaled = false;
                         uiScaleState.uiWidth = screenWidth;
                         uiScaleState.uiHeight = screenHeight;
@@ -200,7 +182,17 @@ export function renderStream(glapi: patchrs.Alt1GlClient, cb: (state: patchrs.Re
                     }
                 }
 
-                cb(renders);
+                try {
+                    cb(renders);
+                } finally {
+                    // Dispose all render invocations to free native GPU shared memory.
+                    // MUST happen after cb() completes — the callback processes renders synchronously.
+                    for (const r of renders) { try { r.dispose?.(); } catch (_) {} }
+                }
+
+                // Throttle: wait before capturing the next frame to reduce GPU/CPU overhead.
+                // Without this delay the loop runs every GPU frame, which tanks FPS.
+                await new Promise(resolve => setTimeout(resolve, RENDER_STREAM_INTERVAL_MS));
             }
         })(),
         close: async () => {

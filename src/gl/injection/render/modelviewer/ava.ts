@@ -356,7 +356,7 @@ export class AvaViewer {
 			this.gl.bindBuffer(this.gl.ELEMENT_ARRAY_BUFFER, model.glboundIndexBuffer);
 
 			for (var attr of model.model.vertexData.layout) {
-				if (this.attriubtes[attr.name] === undefined) { console.warn("unused render param " + attr.name); continue; }
+				if (this.attriubtes[attr.name] === undefined) { continue; }
 				this.gl.vertexAttribPointer(this.attriubtes[attr.name], attr.veclength, attr.gltype, attr.normalize, attr.bytestride, attr.byteoffset);
 			}
 

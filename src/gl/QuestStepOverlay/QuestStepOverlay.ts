@@ -32,6 +32,7 @@ const VERTEX_SHADER = `
   uniform vec2 uSize;
   uniform float uFlipY; // 1.0 = flip Y for screen coords, 0.0 = no flip for UI framebuffer
   uniform float uFlipV; // 1.0 = flip V texture coord (needed for framebuffer rendering)
+  uniform vec4 uViewport; // Live viewport from GL state (x, y, width, height) — updated each frame via uniformSources
 
   out vec2 vUV;
 
@@ -40,8 +41,11 @@ const VERTEX_SHADER = `
     vec2 scaledPos = aPos * uSize;
     // Add position offset
     vec2 screenPos = scaledPos + uPosition;
+    // Use live viewport dimensions (zw) when available, fall back to baked uScreenSize
+    // This prevents oversized rendering when GL viewport changes during teleport/transitions
+    vec2 screenDims = uViewport.z > 0.0 ? uViewport.zw : uScreenSize;
     // Convert to NDC: [0, screenSize] -> [-1, 1]
-    vec2 ndc = (screenPos / uScreenSize) * 2.0 - 1.0;
+    vec2 ndc = (screenPos / screenDims) * 2.0 - 1.0;
     // Conditionally flip Y axis based on render target
     // - frameend (screen): flip Y (screen coords have Y=0 at top)
     // - UI framebuffer (4K): no flip (OpenGL coords have Y=0 at bottom)
@@ -153,7 +157,6 @@ export class QuestStepOverlay {
 
     // Subscribe to resolution changes from UIScaleManager
     this.unsubscribeResolution = onResolutionChange((info: UIScaleInfo) => {
-      console.log(`[QuestStepOverlay] Resolution change detected: ${info.screenWidth}x${info.screenHeight}, isScaled=${info.isScaled}`);
       this.handleResolutionChange(info);
     });
 
@@ -165,14 +168,12 @@ export class QuestStepOverlay {
         if (this.isVisible && this.overlayHandle) {
           this.hiddenForTeleport = true;
           this.stopOverlay();
-          console.log("[QuestStepOverlay] Hidden for teleport");
         }
       } else {
         // Restore overlay after teleport
         if (this.hiddenForTeleport && this.isVisible) {
           this.hiddenForTeleport = false;
           this.updateOverlay();
-          console.log("[QuestStepOverlay] Restored after teleport");
         }
       }
     }, "questStepOverlay");
@@ -188,9 +189,8 @@ export class QuestStepOverlay {
 
     // Ignore invalid/minimized window dimensions
     // When minimized, dimensions can become very small or 0
-    const MIN_VALID_SIZE = 100;
+    const MIN_VALID_SIZE = 640;
     if (newWidth < MIN_VALID_SIZE || newHeight < MIN_VALID_SIZE) {
-      console.log(`[QuestStepOverlay] Ignoring small resolution: ${newWidth}x${newHeight} (window likely minimized)`);
       return;
     }
 
@@ -201,7 +201,6 @@ export class QuestStepOverlay {
     this.uiFramebufferInfo = null;
 
     if (newWidth !== oldWidth || newHeight !== oldHeight) {
-      console.log(`[QuestStepOverlay] UI size changed: ${oldWidth}x${oldHeight} -> ${newWidth}x${newHeight}`);
       this.uiSize = { width: newWidth, height: newHeight };
 
       // Load position saved for this specific resolution
@@ -214,7 +213,6 @@ export class QuestStepOverlay {
         x: Math.max(0, Math.min(savedPosition.x, maxX)),
         y: Math.max(0, Math.min(savedPosition.y, maxY)),
       };
-      console.log(`[QuestStepOverlay] Loaded position for ${newWidth}x${newHeight}: (${this.position.x}, ${this.position.y})`);
 
       // Recreate overlay with new dimensions
       if (this.isVisible) {
@@ -394,7 +392,6 @@ export class QuestStepOverlay {
     // Ignore invalid/minimized window dimensions
     const MIN_VALID_SIZE = 100;
     if (width < MIN_VALID_SIZE || height < MIN_VALID_SIZE) {
-      console.log(`[QuestStepOverlay] Ignoring small screen size: ${width}x${height}`);
       return;
     }
 
@@ -413,7 +410,6 @@ export class QuestStepOverlay {
     }
 
     if (resolutionChanged && this.isVisible) {
-      console.log(`[QuestStepOverlay] Resolution changed: ${oldWidth}x${oldHeight} -> ${width}x${height}, recreating overlay`);
       this.updateOverlay();
     }
   }
@@ -432,7 +428,6 @@ export class QuestStepOverlay {
   ): Promise<void> {
     // Validate step index - don't show for invalid steps
     if (stepIndex < 0) {
-      console.log(`[QuestStepOverlay] Invalid step index: ${stepIndex}, hiding overlay`);
       await this.hide();
       return;
     }
@@ -487,27 +482,19 @@ export class QuestStepOverlay {
    * Dialog options are completed in order
    */
   async markDialogCompleted(): Promise<void> {
-    console.log(`[QuestStepOverlay] markDialogCompleted called - hasDialogOptions: ${!!this.currentDialogOptions}, completedCount: ${this.completedDialogCount}, totalOptions: ${this.currentDialogOptions?.length ?? 0}, isVisible: ${this.isVisible}`);
-
     if (!this.currentDialogOptions) {
-      console.log(`[QuestStepOverlay] No dialog options set, returning early`);
       return;
     }
 
     if (this.completedDialogCount >= this.currentDialogOptions.length) {
-      console.log(`[QuestStepOverlay] All dialogs already completed, returning early`);
       return;
     }
 
     this.completedDialogCount++;
-    console.log(`[QuestStepOverlay] Dialog ${this.completedDialogCount}/${this.currentDialogOptions.length} marked completed`);
 
     // Recreate overlay to show updated completion state
     if (this.isVisible) {
-      console.log(`[QuestStepOverlay] Updating overlay to show completion`);
       await this.updateOverlay();
-    } else {
-      console.log(`[QuestStepOverlay] Overlay not visible, skipping update`);
     }
   }
 
@@ -526,16 +513,19 @@ export class QuestStepOverlay {
   }
 
   /** Cached UI framebuffer info for 4K rendering */
-  private uiFramebufferInfo: { framebufferId: number; width: number; height: number } | null = null;
+  private uiFramebufferInfo: { framebufferId: number; width: number; height: number; cachedAt: number } | null = null;
 
   /**
    * Find the UI framebuffer for 4K rendering
    * At 4K, the UI renders to a separate framebuffer which is then scaled by Lanczos
    */
   private async findUIFramebuffer(): Promise<{ framebufferId: number; width: number; height: number } | null> {
-    if (this.uiFramebufferInfo) {
+    // Check cache with 5-second TTL
+    if (this.uiFramebufferInfo && (Date.now() - this.uiFramebufferInfo.cachedAt) < 5000) {
       return this.uiFramebufferInfo;
     }
+    // Invalidate stale cache
+    this.uiFramebufferInfo = null;
 
     if (!patchrs.native) return null;
 
@@ -551,8 +541,6 @@ export class QuestStepOverlay {
           framebufferId: 0,
         });
 
-        console.log(`[QuestStepOverlay] findUIFramebuffer: Got ${screenRenders.length} renders from fb 0`);
-
         // Find the Lanczos scaler and get its source texture
         let scalingTextureId = 0;
         for (const render of screenRenders) {
@@ -563,7 +551,6 @@ export class QuestStepOverlay {
             const sampler = Object.values(textureData)[0] as patchrs.TextureSnapshot | patchrs.TrackedTexture | undefined;
             if (sampler) {
               scalingTextureId = sampler.texid;
-              console.log(`[QuestStepOverlay] Found Lanczos scaler reading from texture ${scalingTextureId}`);
               break;
             }
           }
@@ -583,13 +570,12 @@ export class QuestStepOverlay {
               framebufferId: uiRender.framebufferId,
               width: uiRender.viewport.width,
               height: uiRender.viewport.height,
+              cachedAt: Date.now(),
             };
-            console.log(`[QuestStepOverlay] Found UI framebuffer: fb=${this.uiFramebufferInfo.framebufferId}, size=${this.uiFramebufferInfo.width}x${this.uiFramebufferInfo.height}`);
             return this.uiFramebufferInfo;
           }
         }
 
-        console.log("[QuestStepOverlay] UI framebuffer not found");
         return null;
       } finally {
         for (const r of screenRenders) {
@@ -639,8 +625,6 @@ export class QuestStepOverlay {
     // Store UI size for position clamping
     this.uiSize = { width: uiWidth, height: uiHeight };
 
-    console.log(`[QuestStepOverlay] Screen: ${screenWidth}x${screenHeight}, UI: ${uiWidth}x${uiHeight}, isScaled=${isScaled}`);
-
     // Render text to texture
     const renderResult = renderQuestStep(
       this.currentStepIndex,
@@ -668,20 +652,11 @@ export class QuestStepOverlay {
     newTopY = Math.max(minY, Math.min(newTopY, maxY));
 
     if (newTopY !== this.position.y) {
-      console.log(`[QuestStepOverlay] Expand upward: Y ${this.position.y} -> ${newTopY} (height: ${oldHeight} -> ${this.size.height})`);
       this.position.y = newTopY;
     }
 
     // Create texture from rendered text
-    const imgData = renderResult.imageData;
-    let nonZeroPixels = 0;
-    for (let i = 3; i < imgData.data.length; i += 4) {
-      if (imgData.data[i] > 0) nonZeroPixels++;
-    }
-    console.log(`[QuestStepOverlay] Creating texture: ${imgData.width}x${imgData.height} pixels, ${nonZeroPixels} non-transparent pixels`);
-
     this.texture = patchrs.native.createTexture(renderResult.imageData);
-    console.log(`[QuestStepOverlay] Texture created: texid=${this.texture.texid}`);
 
     // Create uniform snapshot using the builder
     const uniforms = new UniformSnapshotBuilder({
@@ -695,6 +670,7 @@ export class QuestStepOverlay {
       uBorderColor: "vec4",
       uCornerRadius: "float",
       uBorderWidth: "float",
+      uViewport: "vec4",
     });
 
     // Always render to frameend (screen space) for "freespace" overlay
@@ -715,7 +691,6 @@ export class QuestStepOverlay {
       finalPosY = this.position.y * scaleY;
       finalWidth = renderResult.width * scaleX;
       finalHeight = renderResult.height * scaleY;
-      console.log(`[QuestStepOverlay] 4K scaling: UI(${this.position.x},${this.position.y}) -> Screen(${finalPosX.toFixed(1)},${finalPosY.toFixed(1)}), scale=${scaleX.toFixed(2)}x${scaleY.toFixed(2)}`);
     } else {
       // 1080p mode: no scaling needed
       finalPosX = this.position.x;
@@ -727,8 +702,6 @@ export class QuestStepOverlay {
     // Always use frameend: Y-flip in NDC, no V flip
     const flipY = 1.0;
     const flipV = 0.0;
-
-    console.log(`[QuestStepOverlay] Uniforms: renderSize=${renderWidth}x${renderHeight}, pos=(${finalPosX},${finalPosY}), size=${finalWidth}x${finalHeight}, flipY=${flipY}, flipV=${flipV}, isScaled=${isScaled}`);
 
     // Write uniform values
     uniforms.mappings.uScreenSize.write([renderWidth, renderHeight]);
@@ -742,6 +715,12 @@ export class QuestStepOverlay {
     uniforms.mappings.uBorderColor.write([136/255, 204/255, 255/255, 1.0]); // #88ccff
     uniforms.mappings.uCornerRadius.write([8.0]);
     uniforms.mappings.uBorderWidth.write([2.0]);
+    // Initialize viewport with baked values (overridden each frame by uniformSources builtin)
+    uniforms.mappings.uViewport.write([0, 0, renderWidth, renderHeight]);
+
+    // Viewport builtin: dynamically updates uViewport each frame with the live GL viewport
+    // This prevents oversized rendering when the viewport changes during teleport/transitions
+    const viewportSource = { name: "uViewport", sourceName: "viewport", type: "builtin" as const };
 
     // Create shader program
     this.program = patchrs.native.createProgram(
@@ -753,7 +732,6 @@ export class QuestStepOverlay {
       ],
       uniforms.args
     );
-    console.log(`[QuestStepOverlay] Program created: programId=${this.program.programId}`);
 
     // Create vertex array (simple quad)
     this.vertexArray = this.createVertexArray();
@@ -780,8 +758,6 @@ export class QuestStepOverlay {
           uniforms.mappings.uFlipY.write([0.0]);
           uniforms.mappings.uFlipV.write([1.0]);
 
-          console.log(`[QuestStepOverlay] 4K UI fb: screenY=${this.position.y} -> glY=${glPositionY.toFixed(1)} (fbHeight=${uiFb.height})`);
-
           this.overlayHandle = patchrs.native.beginOverlay(
             { },
             this.program,
@@ -790,15 +766,15 @@ export class QuestStepOverlay {
               uniformBuffer: uniforms.buffer,
               samplers: { "0": this.texture },
               renderMode: "triangles",
-              trigger: "frameend",  
-              uniformSources: [],
+              trigger: "frameend",
+              uniformSources: [viewportSource],
               alphaBlend: true,
             }
           );
-          console.log(`[QuestStepOverlay] Created overlay (4K UI fb): fb=${uiFb.framebufferId}, trigger=after, pos=(${this.position.x.toFixed(1)},${this.position.y.toFixed(1)}), size=${renderResult.width}x${renderResult.height}`);
         } else {
+          // UI framebuffer not found — fall through to frameend (same as 1080p)
           this.overlayHandle = patchrs.native.beginOverlay(
-            {framebufferId: this.uiFramebufferInfo.framebufferId},
+            {},
             this.program,
             this.vertexArray,
             {
@@ -806,11 +782,10 @@ export class QuestStepOverlay {
               samplers: { "0": this.texture },
               renderMode: "triangles",
               trigger: "frameend",
-              uniformSources: [],
+              uniformSources: [viewportSource],
               alphaBlend: true,
             }
           );
-          console.log(`[QuestStepOverlay] Created overlay (4K fallback): frameend, pos=(${finalPosX.toFixed(1)},${finalPosY.toFixed(1)}), size=${finalWidth.toFixed(1)}x${finalHeight.toFixed(1)}`);
         }
       } else {
         // 1080p mode: use frameend with empty filter
@@ -823,11 +798,10 @@ export class QuestStepOverlay {
             samplers: { "0": this.texture },
             renderMode: "triangles",
             trigger: "frameend",
-            uniformSources: [],
+            uniformSources: [viewportSource],
             alphaBlend: true,
           }
         );
-        console.log(`[QuestStepOverlay] Created overlay (1080p): frameend, pos=(${finalPosX.toFixed(1)},${finalPosY.toFixed(1)}), size=${finalWidth.toFixed(1)}x${finalHeight.toFixed(1)}`);
       }
     } catch (e) {
       console.error("[QuestStepOverlay] Failed to create overlay:", e);
@@ -899,7 +873,6 @@ export class QuestStepOverlay {
     if (this.overlayHandle) {
       try {
         this.overlayHandle.stop();
-        console.log("[QuestStepOverlay] Stopped overlay");
       } catch (e) {
         console.error("[QuestStepOverlay] Error stopping overlay:", e);
       }

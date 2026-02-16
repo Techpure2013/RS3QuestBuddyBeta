@@ -55,7 +55,6 @@ export async function initUIBoundsDetector(): Promise<boolean> {
       return false;
     }
     state.initialized = true;
-    console.log("[UIBoundsDetector] Initialized");
     return true;
   } catch (e) {
     console.error("[UIBoundsDetector] Failed to initialize:", e);
@@ -69,7 +68,6 @@ export async function initUIBoundsDetector(): Promise<boolean> {
  */
 export async function captureScreen(): Promise<ScreenCapture | null> {
   if (!state.initialized || !patchrs.native) {
-    console.warn("[UIBoundsDetector] Not initialized");
     return null;
   }
 
@@ -78,7 +76,6 @@ export async function captureScreen(): Promise<ScreenCapture | null> {
     const imageData = await patchrs.native.capture(-1, 0, 0, -1, -1);
 
     if (!imageData || !imageData.width || !imageData.height) {
-      console.warn("[UIBoundsDetector] Capture returned invalid data");
       return null;
     }
 
@@ -90,7 +87,6 @@ export async function captureScreen(): Promise<ScreenCapture | null> {
     };
 
     state.lastCapture = capture;
-    console.log(`[UIBoundsDetector] Captured screen: ${capture.width}x${capture.height}`);
     return capture;
   } catch (e: any) {
     if (!e?.message?.includes("No rs process")) {

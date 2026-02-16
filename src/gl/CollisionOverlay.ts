@@ -387,13 +387,8 @@ async function generateCollisionMeshForChunk(
 		const adjustedLocalX = localTileX - CHUNK_SIZE / 2;
 		const adjustedLocalZ = localTileZ - CHUNK_SIZE / 2;
 
-		// Debug log first tile
-		if (!firstTileLogged) {
-			const worldX = (chunkX + 0.5) * TILE_SIZE * CHUNK_SIZE + (adjustedLocalX + 0.5) * TILE_SIZE;
-			const worldZ = (chunkZ + 0.5) * TILE_SIZE * CHUNK_SIZE + (adjustedLocalZ + 0.5) * TILE_SIZE;
-			console.log(`[CollisionOverlay] First tile: game(${tile.x}, ${tile.y}) floor=${floor} floorBaseY=${floorBaseY} -> world(${worldX}, ${worldZ}) y=${y}`);
-			firstTileLogged = true;
-		}
+		// Mark first tile as logged
+		firstTileLogged = true;
 
 		// Generate tile quad
 		const color = getCollisionColor(tile.byte);
@@ -639,16 +634,6 @@ async function createChunkOverlay(
 
 	const renderRanges = [{ start: 0, length: mesh.indices.length }];
 
-	// Log debug info
-	console.log(`[CollisionOverlay] Creating overlay:`, {
-		vertexObjectId,
-		chunkX, chunkZ, floor,
-		positionsLength: mesh.positions.length,
-		indicesLength: mesh.indices.length,
-		firstVertex: mesh.positions.length > 0 ? [mesh.positions[0], mesh.positions[1], mesh.positions[2]] : null,
-		modelMatrix: modelMatrix.slice(12, 15), // translation part
-	});
-
 	try {
 		const overlay = state.patchrs.native.beginOverlay(
 			{ vertexObjectId },
@@ -661,9 +646,6 @@ async function createChunkOverlay(
 			}
 		);
 
-		console.log(
-			`[CollisionOverlay] Created overlay for chunk (${chunkX}, ${chunkZ}) with ${mesh.indices.length / 3} triangles, VAO=${vertexObjectId}`
-		);
 		return overlay;
 	} catch (e) {
 		console.error("[CollisionOverlay] Failed to create overlay:", e);
@@ -684,7 +666,6 @@ async function init(): Promise<boolean> {
 			return false;
 		}
 
-		console.log("[CollisionOverlay] Initialized");
 		return true;
 	} catch (e) {
 		console.error("[CollisionOverlay] Failed to init:", e);
@@ -709,7 +690,6 @@ export async function showCollisionOverlay(
 ): Promise<boolean> {
 	const initialized = await init();
 	if (!initialized || !state.patchrs) {
-		console.log("[CollisionOverlay] Not initialized");
 		return false;
 	}
 
@@ -720,7 +700,6 @@ export async function showCollisionOverlay(
 	const { preloadCollisionData } = await import("../api/clientPathfinder");
 
 	// Preload collision data for the region
-	console.log(`[CollisionOverlay] Preloading collision data around (${centerX}, ${centerY}) floor ${floor}`);
 	await preloadCollisionData(centerX, centerY, floor, 1);
 
 	// Now access the collision cache to get tile data
@@ -738,8 +717,6 @@ export async function showCollisionOverlay(
 			collisionBytes.push({ x, y, byte });
 		}
 	}
-
-	console.log(`[CollisionOverlay] Collected ${collisionBytes.length} tiles`);
 
 	// Group tiles by chunk
 	const chunkMap = new Map<string, TileCollision[]>();
@@ -760,10 +737,8 @@ export async function showCollisionOverlay(
 	});
 
 	const floorChunks = await findFloorChunks(chunkCoords, floor);
-	console.log(`[CollisionOverlay] Found ${floorChunks.size} floor VAOs`);
 
 	if (floorChunks.size === 0) {
-		console.log("[CollisionOverlay] No floor chunks visible - try moving camera");
 		return false;
 	}
 
@@ -788,20 +763,6 @@ export async function showCollisionOverlay(
 	state.centerY = centerY;
 	state.floor = floor;
 	state.radius = radius;
-
-	// Print summary
-	const openCount = collisionBytes.filter((t) => t.byte === 255).length;
-	const partialCount = collisionBytes.filter(
-		(t) => t.byte !== null && t.byte !== 0 && t.byte !== 255
-	).length;
-	const blockedCount = collisionBytes.filter((t) => t.byte === 0).length;
-	const noDataCount = collisionBytes.filter((t) => t.byte === null).length;
-
-	console.log(`[CollisionOverlay] Summary:`);
-	console.log(`  Green (open): ${openCount}`);
-	console.log(`  Yellow (partial): ${partialCount}`);
-	console.log(`  Red (blocked): ${blockedCount}`);
-	console.log(`  Gray (no data): ${noDataCount}`);
 
 	return state.isActive;
 }

@@ -78,7 +78,6 @@ export function extractBufferHashes(
     };
   } catch (e) {
     // Fallback if mesh meta generation fails
-    console.warn("[extractBufferHashes] Failed to generate mesh meta:", e);
     return {
       posBufferHash: "0x00000000",
       posBufferHashNum: 0,

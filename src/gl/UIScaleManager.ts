@@ -20,6 +20,9 @@ export interface UIScaleInfo {
   scaleY: number;
 }
 
+/** Minimum valid game resolution — anything smaller is a loading screen artifact (e.g. 128x128) */
+const MIN_VALID_RESOLUTION = 640;
+
 // Global state
 let state: {
   initialized: boolean;
@@ -67,7 +70,6 @@ async function detectViewportFromRenders(): Promise<{ width: number; height: num
 
   let renders: any[] = [];
   try {
-    console.log(`[UIScaleManager] Detecting viewport from render data...`);
     renders = await state.patchrs.native.recordRenderCalls({
       maxframes: 1,
       features: [],
@@ -75,11 +77,9 @@ async function detectViewportFromRenders(): Promise<{ width: number; height: num
 
     const viewport = renders.find(r => r.viewport)?.viewport;
     if (viewport) {
-      console.log(`[UIScaleManager] Viewport detected: ${viewport.width}x${viewport.height}`);
       return { width: viewport.width, height: viewport.height };
     }
 
-    console.log("[UIScaleManager] No viewport found in render data");
     return null;
   } catch (e) {
     console.warn(`[UIScaleManager] Viewport detection failed:`, e);
@@ -124,7 +124,6 @@ async function detectDPIScaling(): Promise<{
         const samplers = render.samplers || (render as any).textures || {};
         const sampler = Object.values(samplers)[0] as { width: number; height: number } | undefined;
         if (sampler && (sampler.width !== screenWidth || sampler.height !== screenHeight)) {
-          console.log(`[UIScaleManager] DPI scaling detected: UI ${sampler.width}x${sampler.height} -> Screen ${screenWidth}x${screenHeight}`);
           return { screenWidth, screenHeight, uiWidth: sampler.width, uiHeight: sampler.height };
         }
       }
@@ -160,8 +159,6 @@ export async function initUIScaleManager(): Promise<boolean> {
     state.scaleInfo.screenWidth = state.lastScreenWidth;
     state.scaleInfo.screenHeight = state.lastScreenHeight;
 
-    console.log(`[UIScaleManager] Screen size: ${state.lastScreenWidth}x${state.lastScreenHeight}`);
-
     // Try to get viewport dimensions from render data (most reliable)
     const viewport = await detectViewportFromRenders();
     if (viewport) {
@@ -180,7 +177,6 @@ export async function initUIScaleManager(): Promise<boolean> {
       state.scaleInfo.uiHeight = uiHeight;
       state.scaleInfo.scaleX = state.lastScreenWidth / uiWidth;
       state.scaleInfo.scaleY = state.lastScreenHeight / uiHeight;
-      console.log(`[UIScaleManager] 4K mode: UI ${uiWidth}x${uiHeight} -> Screen ${state.lastScreenWidth}x${state.lastScreenHeight}`);
     } else {
       // Non-4K: check for DPI scaling (e.g., 125%)
       const dpiInfo = await detectDPIScaling();
@@ -194,7 +190,6 @@ export async function initUIScaleManager(): Promise<boolean> {
         state.scaleInfo.scaleY = dpiInfo.screenHeight / dpiInfo.uiHeight;
         state.lastScreenWidth = dpiInfo.screenWidth;
         state.lastScreenHeight = dpiInfo.screenHeight;
-        console.log(`[UIScaleManager] DPI mode: UI ${dpiInfo.uiWidth}x${dpiInfo.uiHeight} -> Screen ${dpiInfo.screenWidth}x${dpiInfo.screenHeight}`);
       } else {
         // No scaling detected
         state.scaleInfo.isScaled = false;
@@ -202,7 +197,6 @@ export async function initUIScaleManager(): Promise<boolean> {
         state.scaleInfo.uiHeight = state.lastScreenHeight;
         state.scaleInfo.scaleX = 1;
         state.scaleInfo.scaleY = 1;
-        console.log(`[UIScaleManager] Native resolution: ${state.lastScreenWidth}x${state.lastScreenHeight}`);
       }
     }
 
@@ -242,46 +236,67 @@ function startScaleMonitoring(): void {
         const currentWidth = viewport?.width || state.patchrs.native.getRsWidth() || 1920;
         const currentHeight = viewport?.height || state.patchrs.native.getRsHeight() || 1080;
 
-        // Detect resolution change
+        // Detect resolution change with stability check
         if (currentWidth !== state.lastScreenWidth || currentHeight !== state.lastScreenHeight) {
-          console.log(`[UIScaleManager] Resolution changed: ${state.lastScreenWidth}x${state.lastScreenHeight} -> ${currentWidth}x${currentHeight}`);
-          state.lastScreenWidth = currentWidth;
-          state.lastScreenHeight = currentHeight;
-          state.scaleInfo.screenWidth = currentWidth;
-          state.scaleInfo.screenHeight = currentHeight;
+          // Wait 500ms and re-check to filter transient changes (e.g., teleport animations)
+          await new Promise(resolve => setTimeout(resolve, 500));
 
-          // Update scale info based on resolution
-          if (currentWidth > 2560) {
-            const { uiWidth, uiHeight } = calculateAssumedUISize(currentWidth, currentHeight);
-            state.scaleInfo.isScaled = true;
-            state.scaleInfo.uiWidth = uiWidth;
-            state.scaleInfo.uiHeight = uiHeight;
-            state.scaleInfo.scaleX = currentWidth / uiWidth;
-            state.scaleInfo.scaleY = currentHeight / uiHeight;
-            console.log(`[UIScaleManager] 4K mode: UI ${uiWidth}x${uiHeight} -> Screen ${currentWidth}x${currentHeight}`);
-          } else {
-            // Non-4K: check for DPI scaling
-            const dpiInfo = await detectDPIScaling();
-            if (dpiInfo) {
-              state.scaleInfo.isScaled = true;
-              state.scaleInfo.screenWidth = dpiInfo.screenWidth;
-              state.scaleInfo.screenHeight = dpiInfo.screenHeight;
-              state.scaleInfo.uiWidth = dpiInfo.uiWidth;
-              state.scaleInfo.uiHeight = dpiInfo.uiHeight;
-              state.scaleInfo.scaleX = dpiInfo.screenWidth / dpiInfo.uiWidth;
-              state.scaleInfo.scaleY = dpiInfo.screenHeight / dpiInfo.uiHeight;
-              console.log(`[UIScaleManager] DPI mode: UI ${dpiInfo.uiWidth}x${dpiInfo.uiHeight} -> Screen ${dpiInfo.screenWidth}x${dpiInfo.screenHeight}`);
-            } else {
-              state.scaleInfo.isScaled = false;
-              state.scaleInfo.uiWidth = currentWidth;
-              state.scaleInfo.uiHeight = currentHeight;
-              state.scaleInfo.scaleX = 1;
-              state.scaleInfo.scaleY = 1;
-              console.log(`[UIScaleManager] Native resolution: ${currentWidth}x${currentHeight}`);
+          let confirmRenders: any[] = [];
+          try {
+            confirmRenders = await state.patchrs.native.recordRenderCalls({
+              maxframes: 1,
+              features: [],
+            });
+            const confirmViewport = confirmRenders.find(r => r.viewport)?.viewport;
+            const confirmWidth = confirmViewport?.width || state.patchrs.native.getRsWidth() || 1920;
+            const confirmHeight = confirmViewport?.height || state.patchrs.native.getRsHeight() || 1080;
+
+            // Only broadcast if resolution is still the same as the first detection
+            // (filters out transient viewport changes from teleport/loading animations)
+            if (confirmWidth !== state.lastScreenWidth || confirmHeight !== state.lastScreenHeight) {
+              // Reject obviously invalid resolutions — RS3 loading screens use tiny viewports (e.g. 128x128)
+              if (confirmWidth >= MIN_VALID_RESOLUTION && confirmHeight >= MIN_VALID_RESOLUTION) {
+                state.lastScreenWidth = confirmWidth;
+                state.lastScreenHeight = confirmHeight;
+                state.scaleInfo.screenWidth = confirmWidth;
+                state.scaleInfo.screenHeight = confirmHeight;
+
+                // Update scale info based on resolution
+                if (confirmWidth > 2560) {
+                  const { uiWidth, uiHeight } = calculateAssumedUISize(confirmWidth, confirmHeight);
+                  state.scaleInfo.isScaled = true;
+                  state.scaleInfo.uiWidth = uiWidth;
+                  state.scaleInfo.uiHeight = uiHeight;
+                  state.scaleInfo.scaleX = confirmWidth / uiWidth;
+                  state.scaleInfo.scaleY = confirmHeight / uiHeight;
+                } else {
+                  // Non-4K: check for DPI scaling
+                  const dpiInfo = await detectDPIScaling();
+                  if (dpiInfo) {
+                    state.scaleInfo.isScaled = true;
+                    state.scaleInfo.screenWidth = dpiInfo.screenWidth;
+                    state.scaleInfo.screenHeight = dpiInfo.screenHeight;
+                    state.scaleInfo.uiWidth = dpiInfo.uiWidth;
+                    state.scaleInfo.uiHeight = dpiInfo.uiHeight;
+                    state.scaleInfo.scaleX = dpiInfo.screenWidth / dpiInfo.uiWidth;
+                    state.scaleInfo.scaleY = dpiInfo.screenHeight / dpiInfo.uiHeight;
+                  } else {
+                    state.scaleInfo.isScaled = false;
+                    state.scaleInfo.uiWidth = confirmWidth;
+                    state.scaleInfo.uiHeight = confirmHeight;
+                    state.scaleInfo.scaleX = 1;
+                    state.scaleInfo.scaleY = 1;
+                  }
+                }
+
+                notifyResolutionChange();
+              }
+            }
+          } finally {
+            for (const r of confirmRenders) {
+              try { r.dispose?.(); } catch (_) {}
             }
           }
-
-          notifyResolutionChange();
         }
 
         // Wait before next check (2 seconds)

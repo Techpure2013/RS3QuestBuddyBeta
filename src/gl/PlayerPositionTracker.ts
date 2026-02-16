@@ -156,7 +156,7 @@ function logRawY(yTileUnits: number, gameX: number, gameY: number): void {
 	const now = Date.now();
 	if (now - lastYLogTime < Y_LOG_INTERVAL) return;
 	lastYLogTime = now;
-	console.log(`[FloorData] Y=${yTileUnits.toFixed(3)} at (${gameX}, ${gameY}) floor=${trackedFloor} [${floorConfidence}]`);
+	// Removed per-poll logging for performance
 }
 
 // Terrain validation state
@@ -219,12 +219,10 @@ async function validateFloorWithTerrain(
 			// (if we're on floor 1+ and terrain says floor 0, we probably went down)
 			if (floorConfidence === "assumed") {
 				// Not confirmed via transport - trust terrain for going DOWN
-				console.log(`[PlayerTracker] Terrain detection (down): level ${bestMatch.level} (height diff: ${heightDiff.toFixed(0)})`);
 				return bestMatch.level;
 			}
 			// If we've confirmed via transport, only override going DOWN if very confident
 			if (heightDiff < HEIGHT_TOLERANCE / 2) {
-				console.log(`[PlayerTracker] Terrain override (down): level ${bestMatch.level} (high confidence, diff: ${heightDiff.toFixed(0)})`);
 				return bestMatch.level;
 			}
 		}
@@ -319,7 +317,6 @@ function checkVerticalTransportArrival(
 		const dy = Math.abs(gameY - toY);
 
 		if (dx <= TRANSPORT_DETECTION_RADIUS && dy <= TRANSPORT_DETECTION_RADIUS) {
-			console.log(`[PlayerTracker] Detected vertical transport: ${transportType} from floor ${fromFloor} to ${toFloor}`);
 			return toFloor;
 		}
 	}
@@ -583,17 +580,14 @@ export async function startPlayerTracking(
 	// If already tracking with initialized passive tracker, just add the callback
 	if (passiveTracker?.isInitialized() && pollingInterval) {
 		positionCallbacks.set(id, onUpdate);
-		console.log(`[PlayerTracker] Added callback "${id}" to existing tracker (total: ${positionCallbacks.size})`);
 		return id;
 	}
 
 	// If currently initializing, wait for it to complete then add callback
 	if (isInitializing && initializationPromise) {
-		console.log(`[PlayerTracker] Waiting for initialization to complete for callback "${id}"`);
 		const success = await initializationPromise;
 		if (success && passiveTracker?.isInitialized() && pollingInterval) {
 			positionCallbacks.set(id, onUpdate);
-			console.log(`[PlayerTracker] Added callback "${id}" after init wait (total: ${positionCallbacks.size})`);
 			return id;
 		}
 		return false;
@@ -636,7 +630,6 @@ export async function startPlayerTracking(
 
 		// Add the callback
 		positionCallbacks.set(id, onUpdate);
-		console.log(`[PlayerTracker] Registered initial callback "${id}", starting polling at ${intervalMs}ms`);
 
 		// Clear any existing interval
 		if (pollingInterval) {
@@ -690,7 +683,6 @@ export async function startPlayerTracking(
 							if (yDelta < -Y_FLOOR_CHANGE_THRESHOLD) {
 								const newFloor = Math.max(0, trackedFloor - 1);
 								if (newFloor !== trackedFloor) {
-									console.log(`[PlayerTracker] Y-based floor down: ${trackedFloor} -> ${newFloor} (Y delta: ${yDelta.toFixed(0)})`);
 									trackedFloor = newFloor;
 									floorConfidence = "assumed";
 									lastFloorChangeTime = now;
@@ -732,7 +724,6 @@ export async function startPlayerTracking(
 							// Suppress callbacks during teleport transition to prevent huge/distorted overlays
 							isTeleporting = true;
 							teleportSuppressUntil = now + TELEPORT_SUPPRESSION_MS;
-							console.log(`[PlayerTracker] Teleport detected, suppressing overlays for ${TELEPORT_SUPPRESSION_MS}ms`);
 
 							// Notify teleport subscribers to hide overlays
 							for (const cb of teleportCallbacks.values()) {
@@ -776,7 +767,6 @@ export async function startPlayerTracking(
 					// Check if teleport suppression has expired
 					if (isTeleporting && now >= teleportSuppressUntil) {
 						isTeleporting = false;
-						console.log("[PlayerTracker] Teleport suppression ended, resuming overlays");
 
 						// Notify teleport subscribers to show overlays again
 						for (const cb of teleportCallbacks.values()) {

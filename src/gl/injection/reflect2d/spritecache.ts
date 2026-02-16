@@ -223,22 +223,16 @@ export class SpriteCache {
      */
     async loadItemHashes(): Promise<void> {
         try {
-            console.log(`[SpriteCache] Loading items from API: ${ITEMS_API}`);
             const response = await fetch(`${ITEMS_API}?limit=500`);
             if (!response.ok) {
-                console.warn(`[SpriteCache] API returned ${response.status}`);
                 return;
             }
             const result = await response.json() as { items: ApiItem[]; total: number };
             const items = result.items || [];
-            let loaded = 0;
             for (const item of items) {
                 if (!item.name || !item.pHash) continue;
-
                 this.pHashItems.set(item.pHash, item.name);
-                loaded++;
             }
-            console.log(`[SpriteCache] Loaded ${loaded} items from API`);
         } catch (err) {
             console.error("[SpriteCache] Failed to load item hashes from API:", err);
         }
@@ -279,14 +273,6 @@ export class SpriteCache {
                 if (!bestMatch || distance < bestMatch.distance) {
                     bestMatch = { name, distance, pHash: storedPHash };
                 }
-            }
-        }
-
-        // Debug: log search if we have items to search
-        if (this.pHashItems.size > 0 && !bestMatch) {
-            // Only log occasionally to avoid spam
-            if (Math.random() < 0.01) {
-                console.log(`[SpriteCache] No pHash match for ${pHashHex} (${this.pHashItems.size} items in DB)`);
             }
         }
 
@@ -390,8 +376,6 @@ export class SpriteCache {
         this.loadCustomFontFile(s11x12ptdata);
         const s7x9ptdata: CustomJsonFont = await fetch(s7x9ptfile.default).then(res => res.json());
         this.loadCustomFontFile(s7x9ptdata);
-
-        console.log(`[SpriteCache] Loaded ${this.fonts.size} font sheets with ${this.hashes.size} character hashes`);
 
         // Load discovered item hashes from API
         await this.loadItemHashes();

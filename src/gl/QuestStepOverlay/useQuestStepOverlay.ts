@@ -83,13 +83,11 @@ export function useQuestStepOverlay(
         // Check if patchrs is available
         const patchrs = await import("@injection/util/patchrs_napi");
         if (!patchrs.native) {
-          console.warn("[useQuestStepOverlay] Native addon not available");
           return;
         }
 
         overlayRef.current = new QuestStepOverlay();
         setIsAvailable(true);
-        console.log("[useQuestStepOverlay] Initialized");
       } catch (e) {
         console.error("[useQuestStepOverlay] Failed to initialize:", e);
       }
@@ -206,9 +204,7 @@ export function useQuestStepOverlay(
 
   // Mark dialog as completed and check if step is complete
   const markDialogCompleted = useCallback(() => {
-    console.log(`[useQuestStepOverlay] markDialogCompleted called, overlayRef.current exists: ${!!overlayRef.current}`);
     if (overlayRef.current) {
-      console.log(`[useQuestStepOverlay] Calling overlayRef.current.markDialogCompleted()`);
       overlayRef.current.markDialogCompleted();
 
       // Check if all trackable requirements are now complete
@@ -216,14 +212,11 @@ export function useQuestStepOverlay(
       const total = overlayRef.current.getTotalDialogCount();
 
       if (total > 0 && completed >= total) {
-        console.log(`[useQuestStepOverlay] All dialog options completed (${completed}/${total}) - triggering step complete`);
         // Small delay to let the UI update show the completion before advancing
         setTimeout(() => {
           onStepCompleteRef.current?.();
         }, 500);
       }
-    } else {
-      console.warn(`[useQuestStepOverlay] markDialogCompleted called but overlayRef.current is null`);
     }
   }, []);
 

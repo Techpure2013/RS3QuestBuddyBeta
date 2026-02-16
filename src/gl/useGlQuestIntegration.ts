@@ -80,7 +80,7 @@ interface GlQuestIntegrationReturn {
 
 // Config
 
-const PLAYER_TRACKING_INTERVAL = 1000;
+const PLAYER_TRACKING_INTERVAL = 600;
 const MIN_MOVE_DISTANCE = 3;
 const MAX_PATH_TILES = 60;
 const MAX_PATH_RANGE = 50;
@@ -321,8 +321,6 @@ export function useGlQuestIntegration(
 							waitingForReleaseRef.current = true;
 							lastPressedButtonRef.current = { text: lastBtn.text, x: lastBtn.x, y: lastBtn.y, timestamp: Date.now() };
 							completedDialogCountsRef.current.set(lastBtn.text, currentCount + 1);
-							const totalCompleted = Array.from(completedDialogCountsRef.current.values()).reduce((a, b) => a + b, 0);
-							console.log(`[GlQuest] Button "${lastBtn.text}" PRESSED on close! (prevBr=${prevBr?.toFixed(3)}) (${currentCount + 1}/${expectedCount} for this text, ${totalCompleted} total)`);
 							onDialogCompleted?.();
 						}
 					}
@@ -332,9 +330,6 @@ export function useGlQuestIntegration(
 					lastHighlightedButtonRef.current = null;
 					highlightTimestampRef.current = 0;
 					prevHighlightBrightnessRef.current = null;
-
-					// Dialog closed - log for debugging
-					console.log(`[GlQuest] Dialog closed, hadHighlight: ${lastBtn !== null}, timeSince: ${timeSinceHighlight}ms${pressedHandledRef.current ? ' (detected)' : ''}`);
 				}
 			}
 			return;
@@ -361,7 +356,6 @@ export function useGlQuestIntegration(
 				const elapsed = Date.now() - lastPressed.timestamp;
 				// Also require minimum cooldown time to prevent super-fast re-clicks
 				if (elapsed > PRESS_COOLDOWN_MS) {
-					console.log(`[GlQuest] Button released detected (brightness normal), clearing waitingForRelease after ${elapsed}ms`);
 					waitingForReleaseRef.current = false;
 					lastPressedButtonRef.current = null;
 					pressedHandledRef.current = false;
@@ -402,14 +396,6 @@ export function useGlQuestIntegration(
 			// Button is pressed via direct detection OR transition detection
 			const isPressed = matchingButton?.pressed || transitionDetected;
 
-			// Only log when there's a state change (pressed detected or button missing)
-			if (isPressed) {
-				const method = transitionDetected ? 'transition' : 'brightness';
-				console.log(`[GlQuest] Button "${lastBtn.text}" pressed detected! (${method}) br=${currBr?.toFixed(3)}`);
-			} else if (!matchingButton) {
-				console.log(`[GlQuest] Tracked button "${lastBtn.text}" disappeared from dialog`);
-			}
-
 			// Check if our highlighted button is in pressed state
 			if (isPressed) {
 				// Only trigger completion if:
@@ -428,14 +414,10 @@ export function useGlQuestIntegration(
 					lastPressedButtonRef.current = { text: lastBtn.text, x: lastBtn.x, y: lastBtn.y, timestamp: Date.now() };
 					// Increment completion count for this dialog text
 					completedDialogCountsRef.current.set(lastBtn.text, currentCount + 1);
-					const totalCompleted = Array.from(completedDialogCountsRef.current.values()).reduce((a, b) => a + b, 0);
-					console.log(`[GlQuest] Button "${lastBtn.text}" PRESSED detected! Marking complete. (${currentCount + 1}/${expectedCount} for this text, ${totalCompleted} total)`);
 					await spriteOverlayRef.current?.stop(dialogOverlayHandleRef.current);
 					dialogOverlayHandleRef.current = null;
 					lastHighlightedButtonRef.current = null;
 					onDialogCompleted?.();
-				} else if (alreadyCompleted) {
-					console.log(`[GlQuest] Button "${lastBtn.text}" already completed ${currentCount}/${expectedCount} times, ignoring repeat click`);
 				}
 				return;
 			}
@@ -443,28 +425,10 @@ export function useGlQuestIntegration(
 			// That's handled in the release detection block above
 
 			if (!matchingButton) {
-				// Our highlighted button disappeared - but did OTHER buttons remain?
-				// If other buttons are still showing, user likely clicked our button
-				// (clicking transitions to next dialog or closes just that option)
-				const otherButtonsRemain = result.buttons.length > 0;
-
-				console.log(`[GlQuest] Button "${lastBtn.text}" disappeared. Other buttons remain: ${otherButtonsRemain}, count: ${result.buttons.length}`);
-
 				await spriteOverlayRef.current?.stop(dialogOverlayHandleRef.current);
 				dialogOverlayHandleRef.current = null;
 				lastHighlightedButtonRef.current = null;
-
-				if (otherButtonsRemain) {
-					// Other buttons still visible = user clicked our specific button
-					console.log(`[GlQuest] Marking complete - button clicked (other buttons still visible)`);
-					onDialogCompleted?.();
-				} else {
-					// All buttons gone at once = dialog transition or dismissal
-					// Could be: click triggered full dialog close, or walk away
-					// For single-option dialogs, still mark as complete
-					console.log(`[GlQuest] All buttons gone - likely dialog transition, marking complete`);
-					onDialogCompleted?.();
-				}
+				onDialogCompleted?.();
 			}
 		}
 
@@ -496,7 +460,6 @@ export function useGlQuestIntegration(
 						Math.abs(lastBtn.x - btn.bg.x) < 5 && Math.abs(lastBtn.y - btn.bg.y) < 5) {
 						return; // Same button, skip
 					}
-					console.log(`[GlQuest] Matched button "${btn.text}" by number ${num}`);
 					await highlightButton(btn);
 					return;
 				}
@@ -509,7 +472,6 @@ export function useGlQuestIntegration(
 						Math.abs(lastBtn.x - btn.bg.x) < 5 && Math.abs(lastBtn.y - btn.bg.y) < 5) {
 						return; // Same button, skip
 					}
-					console.log(`[GlQuest] Matched button "${btn.text}" with option "${option}"`);
 					await highlightButton(btn);
 					return;
 				}
@@ -518,10 +480,6 @@ export function useGlQuestIntegration(
 
 		// No match found - but don't clear overlay immediately
 		// The dialog is present but no matching option, keep existing highlight if any
-		// Only log once per dialog change
-		if (!lastHighlightedButtonRef.current) {
-			console.log(`[GlQuest] No match found. Buttons: ${result.buttons.map(b => b.text).join(", ")}`);
-		}
 	}, [onDialogCompleted]);
 
 	// Highlight a dialog button with overlay
@@ -544,12 +502,8 @@ export function useGlQuestIntegration(
 
 			if (!isSameButton) {
 				// Different button - clear the waiting state so we can detect presses on this new button
-				console.log(`[GlQuest] New button "${btn.text}" highlighted, clearing waitingForRelease from "${lastPressed.text}"`);
 				waitingForReleaseRef.current = false;
 				lastPressedButtonRef.current = null;
-			} else {
-				// Same button - keep waiting for release to prevent double-completion
-				console.log(`[GlQuest] Same button re-highlighted, still waiting for release`);
 			}
 		}
 
@@ -597,7 +551,6 @@ export function useGlQuestIntegration(
 				x, y, width, height,
 				{ color: [0, 255, 0, 200], thickness: 3, mode: "outline" }
 			);
-			console.log(`[GlQuest] Highlighted button: "${btn.text}" at (${x}, ${y})`);
 		} catch (e) {
 			console.error("[GlQuest] Failed to highlight button:", e);
 			// Clear the ref on failure so we can retry
@@ -834,6 +787,7 @@ export function useGlQuestIntegration(
 
 	useEffect(() => {
 		if (!pathfindingEnabled) {
+			stopPlayerTracking(true);
 			clearPathTubes();
 			setIsPathfindingActive(false);
 			lastPathPositionRef.current = null;

@@ -29,7 +29,6 @@ export function useStepHotkeys({ onNextStep, onPrevStep, enabled = true }: UseSt
           'Shift+,',
           'quest-step-prev',
           () => {
-            console.log('[Hotkeys] Previous step hotkey pressed');
             onPrevStep();
           }
         );
@@ -39,13 +38,11 @@ export function useStepHotkeys({ onNextStep, onPrevStep, enabled = true }: UseSt
           'Shift+.',
           'quest-step-next',
           () => {
-            console.log('[Hotkeys] Next step hotkey pressed');
             onNextStep();
           }
         );
 
         hotkeyIdsRef.current = [prevId, nextId].filter(id => id > 0);
-        console.log('[useStepHotkeys] Registered hotkeys:', hotkeyIdsRef.current);
       } catch (e) {
         console.error('[useStepHotkeys] Failed to register hotkeys:', e);
       }

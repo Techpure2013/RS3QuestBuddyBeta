@@ -72,8 +72,6 @@ export function useHudCompassOverlay(
         if (positionX !== undefined && positionY !== undefined) {
           overlayRef.current.setPosition(positionX, positionY);
         }
-
-        console.log("[useHudCompassOverlay] Initialized");
       } catch (e) {
         console.error("[useHudCompassOverlay] Failed to initialize:", e);
       }

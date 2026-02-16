@@ -243,7 +243,6 @@ export class MinimapMarkerOverlay {
       // NOTE: The minimap's 3D terrain is only rendered to backing texture once every ~5 seconds
       // (confirmed by Skillbert). We start tracking lazily when player is within 64 tiles,
       // giving ~5 seconds for the matrix to be captured before the marker is actually needed.
-      console.log("[MinimapMarker] Tracking program ready (will start when player is within 64 tiles)");
 
       // === STEP 2: Template replacement for vertex shader ===
       const usedAttributes = ["aVertexPosition2D", "aTextureUV"];
@@ -256,7 +255,6 @@ export class MinimapMarkerOverlay {
           return;
         }
         vertSource = vertSource.replaceAll(`{{${attr}}}`, String(match.location));
-        console.log(`[MinimapMarker] Attribute ${attr} -> location ${match.location}`);
       }
 
       // === STEP 3: Create uniform builder ===
@@ -300,8 +298,6 @@ export class MinimapMarkerOverlay {
       this.fallbackTexture = patchrs.native.createTexture(fallbackData);
 
       this.initialized = true;
-      console.log("[MinimapMarker] Initialized with Skillbert's tracking pattern");
-      console.log(`[MinimapMarker] FBO: ${minimapInfo.minimapFboTex}, Backing: ${minimapInfo.minimapBackingTex}`);
     } catch (e) {
       console.error("[MinimapMarker] Init error:", e);
       throw e;
@@ -324,7 +320,6 @@ export class MinimapMarkerOverlay {
       const worldX = target.x * 512;
       const worldZ = target.z * 512;
       this.uniformBuilder.mappings.uMarkerWorldPos.write([worldX, worldZ]);
-      console.log(`[MinimapMarker] Target set to tile (${target.x}, ${target.z}) = world (${worldX}, ${worldZ})`);
 
       if (target.color) {
         this.uniformBuilder.mappings.uMarkerColor.write(target.color);
@@ -370,10 +365,7 @@ export class MinimapMarkerOverlay {
         this.uniformBuilder.mappings.uUseSprite.write([1]);
         this.uniformBuilder.mappings.uMarkerSize.write([5.0]); // Larger for sprite (tiles)
       }
-
-      console.log(`[MinimapMarker] Loaded sprite for ${target.npcName || target.npcId} (${imageData.width}x${imageData.height})`);
     } catch (e) {
-      console.warn(`[MinimapMarker] Sprite load failed, using dot: ${e}`);
       this.spriteTexture = null;
       if (this.uniformBuilder) {
         this.uniformBuilder.mappings.uUseSprite.write([0]);
@@ -410,7 +402,6 @@ export class MinimapMarkerOverlay {
       }
     );
     this.trackingStarted = true;
-    console.log("[MinimapMarker] Started tracking overlay on backing texture", this.minimapInfo.minimapBackingTex);
   }
 
   /**

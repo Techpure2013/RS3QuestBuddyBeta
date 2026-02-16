@@ -323,7 +323,6 @@ const QuestPage: React.FC = () => {
 		) {
 			const currentStep = questSteps[active];
 			if (currentStep) {
-				console.log(`[QuestPage] Activating GL overlays for restored step ${active}`);
 				initialGlActivatedRef.current = true;
 				onStepActivated(currentStep, active);
 				// Also activate quest engine for the restored step
@@ -385,10 +384,8 @@ const QuestPage: React.FC = () => {
 		const nextStep = Math.min(active + 1, (questSteps?.length || 0) - 1);
 		// Don't advance if already at last step
 		if (nextStep === active) {
-			console.log("[QuestPage] Already at last step, not advancing");
 			return;
 		}
-		console.log(`[QuestPage] Advancing to step ${nextStep}`);
 		setActive(nextStep);
 		updateCompletionState(nextStep);
 

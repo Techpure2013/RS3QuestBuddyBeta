@@ -333,7 +333,6 @@ class FloorOverlayChunk {
                 uniformBuffer: uniforms.buffer
             }));
         }
-        console.log("loaded", this.chunkx, this.chunkz);
         this.loaded = true;
         if (this.stopped) {
             this.stop();
@@ -343,14 +342,12 @@ class FloorOverlayChunk {
     stop() {
         this.stopped = true;
         this.overlayhandles.forEach(q => q.stop());
-        console.log("stopping", this.chunkx, this.chunkz);
     }
 
     constructor(render: patchrs.RenderInvocation, settings: OverlaySettings) {
         let uniform = getUniformValue(render.uniformState, render.program.uniforms.find(q => q.name == "uModelMatrix")!);
         this.chunkx = Math.floor(uniform[0][12] / chunksize / tilesize);
         this.chunkz = Math.floor(uniform[0][14] / chunksize / tilesize);
-        console.log("loading", this.chunkx, this.chunkz);
         this.chunklevel = 0;
         this.targetVertexObject = render.vertexObjectId;
         this.settings = settings;
@@ -371,7 +368,6 @@ export function floorTracker(settings: OverlaySettings) {
         skipVerticesMask: knownchunkmask
     }, renders => {
         if (stopped) { return; }
-        console.log("floortrack", renders.length);
         for (let render of renders) {
             if (!knownProgs.has(render.program)) {
                 if (render.program.inputs.find(q => q.name == "aMaterialSettingsSlotXY3")) {

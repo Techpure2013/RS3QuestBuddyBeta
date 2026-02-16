@@ -94,7 +94,6 @@ export class HudCompassOverlay {
 
     try {
       if (!patchrs.native) {
-        console.warn("[HudCompass] Native addon not available");
         return false;
       }
 
@@ -154,14 +153,12 @@ export class HudCompassOverlay {
           if (this.visible && this.overlayHandle) {
             this.hiddenForTeleport = true;
             this.stopOverlay();
-            console.log("[HudCompass] Hidden for teleport");
           }
         } else {
           // Teleport ended - restore overlay if it was hidden
           if (this.hiddenForTeleport && this.visible) {
             this.hiddenForTeleport = false;
             this.recreateOverlay();
-            console.log("[HudCompass] Restored after teleport");
           }
         }
       }, "hudCompassOverlay");
@@ -231,7 +228,7 @@ export class HudCompassOverlay {
     const newHeight = info.uiHeight;
 
     // Ignore small/invalid dimensions (window minimized)
-    if (newWidth < 100 || newHeight < 100) return;
+    if (newWidth < 640 || newHeight < 640) return;
 
     const oldWidth = this.uiSize?.width ?? 0;
     const oldHeight = this.uiSize?.height ?? 0;
@@ -240,7 +237,6 @@ export class HudCompassOverlay {
     this.uiFramebufferInfo = null;
 
     if (newWidth !== oldWidth || newHeight !== oldHeight) {
-      console.log(`[HudCompass] Resolution changed: ${oldWidth}x${oldHeight} -> ${newWidth}x${newHeight}`);
       this.uiSize = { width: newWidth, height: newHeight };
 
       // Load position for this resolution
@@ -328,8 +324,6 @@ export class HudCompassOverlay {
     this.hasTarget = true;
     this.atDestination = false;
 
-    console.log(`[HudCompass] Target set to (${lng}, ${lat})`);
-
     // If we have player position, update glow immediately
     const playerPos = getPlayerPosition();
     if (playerPos) {
@@ -352,8 +346,6 @@ export class HudCompassOverlay {
       // Use live update instead of recreating
       this.updateBladeGlowLive();
     }
-
-    console.log("[HudCompass] Target cleared");
   }
 
   /**
@@ -415,8 +407,6 @@ export class HudCompassOverlay {
       this.stopAnimation();
       this.stopOverlay();
     }
-
-    console.log(`[HudCompass] Visible: ${visible}`);
   }
 
   /**
@@ -441,7 +431,6 @@ export class HudCompassOverlay {
 
     startPlayerTracking(this.onPlayerPositionUpdate, 100, "hudcompass");
     this.isTrackingPlayer = true;
-    console.log("[HudCompass] Started player tracking");
   }
 
   /**
@@ -452,7 +441,6 @@ export class HudCompassOverlay {
 
     stopPlayerTracking(true, "hudcompass");
     this.isTrackingPlayer = false;
-    console.log("[HudCompass] Stopped player tracking");
   }
 
   /**
@@ -562,9 +550,9 @@ export class HudCompassOverlay {
 
       this.overlayHandle.setUniformState(uniformState);
     } catch (e) {
-      // If live update fails, fall back to recreating overlay
-      console.warn("[HudCompass] Live glow update failed, recreating overlay:", e);
-      this.recreateOverlay();
+      // Native object detached — stop animation to prevent per-frame spam
+      this.stopAnimation();
+      this.overlayHandle = null;
     }
   }
 
@@ -631,8 +619,9 @@ export class HudCompassOverlay {
 
       this.overlayHandle.setUniformState(uniformState);
     } catch (e) {
-      // If live update fails, don't spam errors
-      console.warn("[HudCompass] Live time update failed:", e);
+      // Native object detached — stop the animation loop to prevent per-frame spam
+      this.stopAnimation();
+      this.overlayHandle = null;
     }
   }
 
@@ -668,8 +657,6 @@ export class HudCompassOverlay {
           framebufferId: 0,
         });
 
-        console.log(`[HudCompass] findUIFramebuffer: Got ${screenRenders.length} renders from fb 0`);
-
         // Find the Lanczos scaler and get its source texture
         let scalingTextureId = 0;
         for (const render of screenRenders) {
@@ -680,7 +667,6 @@ export class HudCompassOverlay {
             const sampler = Object.values(textureData)[0] as patchrs.TextureSnapshot | patchrs.TrackedTexture | undefined;
             if (sampler) {
               scalingTextureId = sampler.texid;
-              console.log(`[HudCompass] Found Lanczos scaler reading from texture ${scalingTextureId}`);
               break;
             }
           }
@@ -701,12 +687,10 @@ export class HudCompassOverlay {
               width: uiRender.viewport.width,
               height: uiRender.viewport.height,
             };
-            console.log(`[HudCompass] Found UI framebuffer: fb=${this.uiFramebufferInfo.framebufferId}, size=${this.uiFramebufferInfo.width}x${this.uiFramebufferInfo.height}`);
             return this.uiFramebufferInfo;
           }
         }
 
-        console.log("[HudCompass] UI framebuffer not found");
         return null;
       } finally {
         for (const r of screenRenders) {
@@ -738,8 +722,6 @@ export class HudCompassOverlay {
     const scaleInfo = getUIScaleInfo();
     const isScaled = scaleInfo.isScaled;
 
-    console.log(`[HudCompass] recreateOverlay: isScaled=${isScaled}, screen=${scaleInfo.screenWidth}x${scaleInfo.screenHeight}, ui=${scaleInfo.uiWidth}x${scaleInfo.uiHeight}`);
-
     try {
       if (isScaled) {
         // Scaled mode (4K or DPI): Use UI framebuffer approach like QuestStepOverlay
@@ -749,8 +731,6 @@ export class HudCompassOverlay {
           // Render in UI framebuffer coordinates (same approach as QuestStepOverlay)
           // Y position is flipped for OpenGL coordinate system
           const glPositionY = uiFb.height - this.position.y - this.size.height;
-
-          console.log(`[HudCompass] UI framebuffer mode: fb=${uiFb.framebufferId}, size=${uiFb.width}x${uiFb.height}, pos=(${this.position.x}, ${glPositionY.toFixed(1)})`);
 
           this.uniformBuilder.mappings.uScreenSize.write([uiFb.width, uiFb.height]);
           this.uniformBuilder.mappings.uPosition.write([this.position.x, glPositionY]);
@@ -774,7 +754,6 @@ export class HudCompassOverlay {
           // Fallback: scale UI coords to screen coords
           const scaleX = scaleInfo.screenWidth / scaleInfo.uiWidth;
           const scaleY = scaleInfo.screenHeight / scaleInfo.uiHeight;
-          console.log(`[HudCompass] Scaled fallback: scale ${scaleX.toFixed(3)}x${scaleY.toFixed(3)}, UI (${this.position.x}, ${this.position.y}) -> Screen (${(this.position.x * scaleX).toFixed(1)}, ${(this.position.y * scaleY).toFixed(1)})`);
 
           this.uniformBuilder.mappings.uScreenSize.write([scaleInfo.screenWidth, scaleInfo.screenHeight]);
           this.uniformBuilder.mappings.uPosition.write([this.position.x * scaleX, this.position.y * scaleY]);
@@ -797,7 +776,6 @@ export class HudCompassOverlay {
         }
       } else {
         // 1080p mode: direct screen rendering
-        console.log(`[HudCompass] 1080p mode: screen ${scaleInfo.screenWidth}x${scaleInfo.screenHeight}, pos (${this.position.x}, ${this.position.y})`);
         this.uniformBuilder.mappings.uScreenSize.write([scaleInfo.screenWidth, scaleInfo.screenHeight]);
         this.uniformBuilder.mappings.uPosition.write([this.position.x, this.position.y]);
         this.uniformBuilder.mappings.uSize.write([this.size.width, this.size.height]);
@@ -840,8 +818,6 @@ export class HudCompassOverlay {
    * Dispose all resources
    */
   dispose(): void {
-    console.log("[HudCompass] Disposing...");
-
     this.setVisible(false);
 
     if (this.unsubscribeResolution) {
@@ -862,8 +838,6 @@ export class HudCompassOverlay {
     this.vertexArray = null;
     this.uniformBuilder = null;
     this.initialized = false;
-
-    console.log("[HudCompass] Disposed");
   }
 }
 

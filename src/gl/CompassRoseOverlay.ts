@@ -231,13 +231,12 @@ function generateCompassRose(
  * Initialize the overlay system
  */
 async function init(): Promise<boolean> {
-	
+
 	if (state.patchrs) return true;
 
 	try {
 		state.patchrs = await import("@injection/util/patchrs_napi");
 		if (!state.patchrs.native) {
-			console.warn("[CompassRose] Native addon not available");
 			return false;
 		}
 		console.log("[CompassRose] Initialized");
@@ -278,14 +277,12 @@ async function findFloorForLocation(
 	targetFloor: number
 ): Promise<{ vaoId: number; modelY: number; chunkX: number; chunkZ: number; framebufferId: number } | null> {
 	if (!state.patchrs?.native) {
-		console.log("[CompassRose] findFloorForLocation: no native module");
 		return null;
 	}
 
 	// Calculate target chunk from lat/lng
 	const targetChunkX = Math.floor(targetLng / CHUNK_SIZE);
 	const targetChunkZ = Math.floor(targetLat / CHUNK_SIZE);
-	console.log(`[CompassRose] Looking for floor chunk (${targetChunkX}, ${targetChunkZ}) for target at (${targetLat.toFixed(1)}, ${targetLng.toFixed(1)})`);
 
 	let renders: any[] = [];
 	try {
@@ -295,11 +292,8 @@ async function findFloorForLocation(
 			...(state.knownFloorProgramId !== null ? { skipProgramMask: WRONG_PROG_MASK } : {}),
 		});
 
-		console.log(`[CompassRose] findFloorForLocation: got ${renders.length} renders`);
-
 		// Collect floor renders for the TARGET chunk
 		const chunkRenders: Array<{ render: any; chunkX: number; chunkZ: number; modelY: number }> = [];
-		let markedWrong = 0;
 
 		for (const render of renders) {
 			if (!render.program) continue;
@@ -317,42 +311,29 @@ async function findFloorForLocation(
 				// Mark floor program for future skipping optimization
 				if (state.knownFloorProgramId === null) {
 					state.knownFloorProgramId = render.program.programId;
-					console.log(`[CompassRose] Found floor program: ${state.knownFloorProgramId}`);
-					// DEBUG: Log uniforms to see what's available
-					const uniformNames = render.program.uniforms?.map((u: any) => u.name) || [];
-					console.log(`[CompassRose] Floor program uniforms: ${uniformNames.join(", ")}`);
 				}
 
 				// Get chunk info from this render's model matrix
 				const chunkInfo = getChunkFromRender(render);
 				if (chunkInfo && chunkInfo.chunkX === targetChunkX && chunkInfo.chunkZ === targetChunkZ) {
-					console.log(`[CompassRose] Found main scene floor render: VAO=${render.vertexObjectId}, fb=${render.framebufferId}`);
 					chunkRenders.push({ render, ...chunkInfo });
 				}
 			} else {
 				// Mark non-floor programs to be skipped
 				render.program.skipmask |= WRONG_PROG_MASK;
-				markedWrong++;
 			}
 		}
 
-		console.log(`[CompassRose] Found ${chunkRenders.length} renders for target chunk (${targetChunkX}, ${targetChunkZ}), marked ${markedWrong} non-floor`);
-
 		if (chunkRenders.length === 0) {
-			console.log(`[CompassRose] Target chunk not currently visible`);
 			return null;
 		}
 
 		// Sort by Y ascending (lowest = floor 0)
 		chunkRenders.sort((a, b) => a.modelY - b.modelY);
 
-		console.log(`[CompassRose] Chunk (${targetChunkX}, ${targetChunkZ}) floor Y values: [${chunkRenders.map(f => f.modelY.toFixed(0)).join(", ")}]`);
-
 		// Pick the floor matching targetFloor (clamped to available floors)
 		const floorIndex = Math.min(targetFloor, chunkRenders.length - 1);
 		const selected = chunkRenders[floorIndex];
-
-		console.log(`[CompassRose] Selected floor ${floorIndex} with VAO: ${selected.render.vertexObjectId}, modelY: ${selected.modelY.toFixed(0)}`);
 
 		state.anchorVaoId = selected.render.vertexObjectId;
 		return {
@@ -380,7 +361,6 @@ async function findFloorForLocation(
  */
 async function findFloorVaoAndFramebuffer(): Promise<{ vaoId: number; framebufferId: number } | null> {
 	if (!state.patchrs?.native) {
-		console.log("[CompassRose] findFloorVaoAndFramebuffer: no native module");
 		return null;
 	}
 
@@ -398,12 +378,9 @@ async function findFloorVaoAndFramebuffer(): Promise<{ vaoId: number; framebuffe
 			...(state.knownFloorProgramId !== null ? { skipProgramMask: WRONG_PROG_MASK } : {}),
 		});
 
-		console.log(`[CompassRose] findFloorVaoAndFramebuffer: got ${renders.length} renders, knownFloorProgramId=${state.knownFloorProgramId}`);
-
 		// Match TileOverlayManager pattern exactly - mark non-floor programs with skipmask
 		// Shadow pass programs are different programs and get marked automatically
 		const floorRenders: { vaoId: number; framebufferId: number }[] = [];
-		let markedWrong = 0;
 
 		for (const render of renders) {
 			if (!render.program) continue;
@@ -413,7 +390,6 @@ async function findFloorVaoAndFramebuffer(): Promise<{ vaoId: number; framebuffe
 				// This is a floor render
 				if (state.knownFloorProgramId === null) {
 					state.knownFloorProgramId = render.program.programId;
-					console.log(`[CompassRose] Found floor program: ${state.knownFloorProgramId}`);
 				}
 
 				floorRenders.push({
@@ -423,21 +399,15 @@ async function findFloorVaoAndFramebuffer(): Promise<{ vaoId: number; framebuffe
 			} else {
 				// Mark non-floor programs to be skipped (like TileOverlayManager)
 				render.program.skipmask |= WRONG_PROG_MASK;
-				markedWrong++;
 			}
 		}
-
-		console.log(`[CompassRose] Found ${floorRenders.length} floor renders, marked ${markedWrong} non-floor programs`);
 
 		// Return the LAST floor render (main scene pass, after shadow pass)
 		if (floorRenders.length > 0) {
 			const lastRender = floorRenders[floorRenders.length - 1];
 			state.anchorVaoId = lastRender.vaoId;
-			console.log(`[CompassRose] Using last floor render - VAO: ${lastRender.vaoId}, fb: ${lastRender.framebufferId}`);
 			return lastRender;
 		}
-
-		console.log(`[CompassRose] No floor VAO found`);
 	} catch (e) {
 		console.error("[CompassRose] Error finding floor VAO and framebuffer:", e);
 	} finally {
@@ -486,11 +456,8 @@ export async function drawNpcCompassRoseAttached(
 	markerId?: string,
 	framebufferId?: number
 ): Promise<GlOverlay | null> {
-	console.log(`[CompassRose] drawNpcCompassRoseAttached called for VAO ${npcVaoId}, height offset ${heightOffset}, fb ${framebufferId}`);
-
 	const initialized = await init();
 	if (!initialized || !state.patchrs?.native) {
-		console.log("[CompassRose] Not initialized or no native module");
 		return null;
 	}
 
@@ -581,7 +548,6 @@ export async function drawNpcCompassRoseAttached(
 		);
 
 		state.activeMarkers.set(id, { renderOverlay: overlay, vertexArray: vertex });
-		console.log(`[CompassRose] Created attached marker "${id}" on NPC VAO ${npcVaoId}, fb ${framebufferId}`);
 		return overlay;
 	} catch (e) {
 		console.error("[CompassRose] Failed to create attached overlay:", e);
@@ -599,8 +565,6 @@ export async function drawNpcCompassRoseAtLocation(
 	floor: number,
 	markerId?: string
 ): Promise<GlOverlay | null> {
-	console.log(`[CompassRose] drawNpcCompassRoseAtLocation called at (${lat}, ${lng}) floor ${floor}, markerId: ${markerId}`);
-
 	// Convert tile coordinates to world coordinates
 	// World coordinates: X = lng * TILE_SIZE, Z = lat * TILE_SIZE
 	const worldX = lng * TILE_SIZE;
@@ -608,7 +572,6 @@ export async function drawNpcCompassRoseAtLocation(
 
 	// Get terrain height at this location
 	const worldY = await getHeightAtWorldTile(lat, lng, floor);
-	console.log(`[CompassRose] Converted to world coords: (${worldX.toFixed(0)}, ${worldY.toFixed(0)}, ${worldZ.toFixed(0)})`);
 
 	return drawNpcCompassRose(worldX, worldY, worldZ, markerId);
 }
@@ -637,11 +600,8 @@ export async function drawNpcCompassRoseOnFloor(
 	floor: number,
 	markerId?: string
 ): Promise<GlOverlay | null> {
-	console.log(`[CompassRose] drawNpcCompassRoseOnFloor called at (${lat}, ${lng}) floor ${floor}, markerId: ${markerId}`);
-
 	const initialized = await init();
 	if (!initialized || !state.patchrs?.native) {
-		console.log("[CompassRose] Not initialized or no native module");
 		return null;
 	}
 
@@ -654,7 +614,6 @@ export async function drawNpcCompassRoseOnFloor(
 	// This is critical - we must attach to the correct floor chunk VAO
 	const floorInfo = await findFloorForLocation(lat, lng, floor);
 	if (!floorInfo) {
-		console.log("[CompassRose] Target chunk not visible, cannot create floor-attached compass");
 		return null;
 	}
 
@@ -743,7 +702,6 @@ export async function drawNpcCompassRoseOnFloor(
 		);
 
 		state.activeMarkers.set(id, { renderOverlay: overlay, vertexArray: vertex });
-		console.log(`[CompassRose] Created floor-attached marker "${id}" at world (${targetWorldX.toFixed(0)}, ${baseY.toFixed(0)}, ${targetWorldZ.toFixed(0)}), vaoId=${floorInfo.vaoId}, fb=${floorInfo.framebufferId}`);
 		return overlay;
 	} catch (e) {
 		console.error("[CompassRose] Failed to create floor-attached overlay:", e);

@@ -229,8 +229,6 @@ async function findMinimapRequirements(): Promise<MinimapInfo | null> {
       skipProgramMask: NON_UI_PROGRAM_MASK,
     });
 
-    console.log(`[MinimapDirection] Analyzing ${allRenders.length} total renders`);
-
     // Filter to UI renders only, tagging non-UI programs for future skip
     const uiRenders: patchrs.RenderInvocation[] = [];
     for (const r of allRenders) {
@@ -243,8 +241,6 @@ async function findMinimapRequirements(): Promise<MinimapInfo | null> {
         r.program.skipmask = (r.program.skipmask || 0) | NON_UI_PROGRAM_MASK;
       }
     }
-
-    console.log(`[MinimapDirection] Found ${uiRenders.length} UI renders (tagged ${allRenders.length - uiRenders.length} non-UI for skip)`);
 
     // Use chunkoverlay pattern: find UI render that samples its previous FBO
     let lastFboTex = 0;
@@ -269,7 +265,6 @@ async function findMinimapRequirements(): Promise<MinimapInfo | null> {
         const matchingTex = textures.find(t => t && t.texid === lastFboTex);
 
         if (matchingTex && groupSize >= 2) {
-          console.log(`[MinimapDirection] Found minimap UI framebuffer texture: ${lastFboTex} (${groupSize} renders)`);
           minimapFboTex = lastFboTex;
           minimapProg = render.program;
           minimapBackingTex = lastFirstTex?.texid ?? 0;
@@ -284,26 +279,10 @@ async function findMinimapRequirements(): Promise<MinimapInfo | null> {
       }
     }
 
-    // Log texture debug info if not found
+    // Fallback if not found
     if (minimapFboTex === 0) {
-      console.log("[MinimapDirection] Minimap not found via UI texture pattern");
-
-      // Debug: show what textures UI renders have
-      let texCount = 0;
-      for (const render of uiRenders.slice(0, 10)) {
-        const texturesObj = render.textures || {};
-        const textures = Object.values(texturesObj) as patchrs.TrackedTexture[];
-        if (textures.length > 0) {
-          texCount++;
-          const texInfo = textures.map(t => t?.texid ?? 'null').join(', ');
-          console.log(`[MinimapDirection] UI render fbo=${render.framebufferColorTextureId} textures: ${texInfo}`);
-        }
-      }
-      console.log(`[MinimapDirection] ${texCount}/${Math.min(10, uiRenders.length)} UI renders have textures`);
-
       // Fallback: find FBOs with uInvViewProjMatrix (indicates 3D minimap render)
       // The minimap FBO is typically SMALLER than the main world FBO
-      console.log("[MinimapDirection] Trying fallback: looking for FBOs with uInvViewProjMatrix...");
 
       const fboHasInvViewProj: Map<number, { count: number; render: any; width: number; height: number }> = new Map();
 
@@ -336,9 +315,6 @@ async function findMinimapRequirements(): Promise<MinimapInfo | null> {
         .filter(c => c.count >= 10)
         .sort((a, b) => b.count - a.count);
 
-      console.log("[MinimapDirection] FBOs with uInvViewProjMatrix:",
-        candidates.map(c => `FBO ${c.fbo}: ${c.count} renders, ${c.width}x${c.height}`));
-
       // Find the SMALLEST FBO (minimap is ~150-250px, main world is full screen)
       // Filter to FBOs with reasonable minimap size (100-500px)
       const minimapCandidates = candidates.filter(c => {
@@ -353,22 +329,17 @@ async function findMinimapRequirements(): Promise<MinimapInfo | null> {
         minimapFboTex = best.fbo;
         minimapBackingTex = best.fbo;
         minimapProg = best.render.program;
-        console.log(`[MinimapDirection] Using minimap FBO ${minimapFboTex} (${best.width}x${best.height})`);
       } else if (candidates.length >= 2) {
         // Fallback to second-largest if size detection didn't work
         minimapFboTex = candidates[1].fbo;
         minimapBackingTex = candidates[1].fbo;
         minimapProg = candidates[1].render.program;
-        console.log(`[MinimapDirection] Fallback: Using second-largest FBO ${minimapFboTex}`);
       }
     }
 
     if (minimapFboTex === 0 || !minimapProg) {
-      console.log("[MinimapDirection] Failed to find minimap");
       return null;
     }
-
-    console.log("[MinimapDirection] Minimap FBO:", minimapFboTex, "Backing:", minimapBackingTex);
 
     // Find a program with uViewMatrix for passive camera yaw capture
     // This is typically the 3D world render program
@@ -380,13 +351,8 @@ async function findMinimapRequirements(): Promise<MinimapInfo | null> {
       );
       if (hasViewMatrix) {
         viewMatrixProg = render.program;
-        console.log(`[MinimapDirection] Found uViewMatrix program: ${render.program.programId}`);
         break;
       }
-    }
-
-    if (!viewMatrixProg) {
-      console.log("[MinimapDirection] Warning: No program with uViewMatrix found - camera yaw may not work");
     }
 
     return {
@@ -498,20 +464,15 @@ export class MinimapDirectionOverlay {
 
     try {
       // Give game time to render UI - minimap detection needs UI renders
-      console.log("[MinimapDirection] Waiting for UI renders to stabilize...");
       await new Promise(resolve => setTimeout(resolve, 2000));
 
       // Find minimap
       this.minimapInfo = await findMinimapRequirements();
-      if (!this.minimapInfo) {
-        console.log("[MinimapDirection] Could not find minimap, will retry later");
-      } else {
-        console.log("[MinimapDirection] Found minimap FBO:", this.minimapInfo.minimapFboTex);
+      if (this.minimapInfo) {
         await this.setupOverlays();
       }
 
       this.initialized = true;
-      console.log("[MinimapDirection] Initialized");
       return true;
     } catch (e) {
       console.error("[MinimapDirection] Init failed:", e);
@@ -529,7 +490,6 @@ export class MinimapDirectionOverlay {
    */
   setArrowEnabled(enabled: boolean): void {
     this.arrowEnabled = enabled;
-    console.log(`[MinimapDirection] Arrow enabled: ${enabled}`);
 
     if (!enabled && this.arrowVisible) {
       // Hide arrow immediately if it's currently visible
@@ -546,7 +506,6 @@ export class MinimapDirectionOverlay {
    */
   setMarkerEnabled(enabled: boolean): void {
     this.markerEnabled = enabled;
-    console.log(`[MinimapDirection] Marker enabled: ${enabled}`);
 
     if (!enabled && this.markerOverlay) {
       this.markerOverlay.setVisible(false);
@@ -590,7 +549,6 @@ export class MinimapDirectionOverlay {
         [],
         trackingBuilder.args
       );
-      console.log("[MinimapDirection] Created tracking program for uViewMatrix capture");
 
       // Start the passive tracking overlay on framebuffer 0 (screen)
       // This triggers on 3D world renders and captures their uViewMatrix
@@ -611,7 +569,6 @@ export class MinimapDirectionOverlay {
             trigger: "passive",
           }
         );
-        console.log("[MinimapDirection] Started passive tracking overlay for uViewMatrix");
       }
 
       // === STEP 2: Create main arrow overlay ===
@@ -640,7 +597,6 @@ export class MinimapDirectionOverlay {
         ],
         this.uniformBuilder.args
       );
-      console.log("[MinimapDirection] Created overlay program (with passive uViewMatrix capture)");
 
       // Create fullscreen quad vertex array
       if (!this.vertexArray) {
@@ -660,7 +616,6 @@ export class MinimapDirectionOverlay {
           { location: 0, buffer: vertexBuffer, enabled: true, normalized: false, offset: 0, stride: 16, scalartype: GL_FLOAT, vectorlength: 2 },
           { location: 1, buffer: vertexBuffer, enabled: true, normalized: false, offset: 8, stride: 16, scalartype: GL_FLOAT, vectorlength: 2 },
         ]);
-        console.log("[MinimapDirection] Created vertex array");
       }
 
       // Create the overlay
@@ -679,9 +634,6 @@ export class MinimapDirectionOverlay {
         // Pass our tracking program so marker can source uViewMatrix for camera yaw
         viewMatrixTrackingProg: this.trackingProgram ?? undefined,
       });
-      console.log("[MinimapDirection] Marker overlay initialized with camera yaw tracking");
-
-      console.log("[MinimapDirection] Overlay setup complete - using PlayerPositionTracker");
     } catch (e) {
       console.error("[MinimapDirection] Failed to setup overlays:", e);
     }
@@ -886,8 +838,6 @@ export class MinimapDirectionOverlay {
           npcName: npc.npcName,
           npcId: npc.npcId,
         });
-        // lat=Z (north-south), lng=X (east-west) in Leaflet convention
-        console.log(`[MinimapDirection] Added NPC target "${npc.npcName}" at X=${npc.npcLocation.lng}, Z=${npc.npcLocation.lat}`);
       }
     }
 
@@ -900,12 +850,9 @@ export class MinimapDirectionOverlay {
             color: [100, 200, 255, 255],
             label: "Object",
           });
-          console.log(`[MinimapDirection] Added Object target at X=${loc.lng}, Z=${loc.lat}`);
         }
       }
     }
-
-    console.log(`[MinimapDirection] Set ${this.targets.length} total targets`);
     this.updateUniforms();
   }
 
@@ -956,8 +903,6 @@ export class MinimapDirectionOverlay {
 
     // Recreate overlay with new target position
     this.recreateOverlay();
-
-    console.log(`[MinimapDirection] Target set to (${targetX}, ${targetZ})`);
   }
 
   /**
@@ -976,8 +921,6 @@ export class MinimapDirectionOverlay {
     if (currentPos) {
       this.onPlayerPositionUpdate(currentPos);
     }
-
-    console.log("[MinimapDirection] Started - subscribed to PlayerPositionTracker");
   }
 
   /**
@@ -989,7 +932,6 @@ export class MinimapDirectionOverlay {
     // Note: stopPlayerTracking with preserveTracker=true keeps the underlying tracker running
     // for other consumers, we just stop receiving updates
     this.isTrackingPlayer = false;
-    console.log("[MinimapDirection] Stopped");
   }
 
   /**
@@ -1004,7 +946,6 @@ export class MinimapDirectionOverlay {
         this.minimapInfo = await findMinimapRequirements();
         if (!this.minimapInfo) return;
 
-        console.log("[MinimapDirection] Found minimap FBO:", this.minimapInfo.minimapFboTex);
         await this.setupOverlays();
 
         // Re-apply target if we have one
@@ -1024,8 +965,6 @@ export class MinimapDirectionOverlay {
   }
 
   async dispose(): Promise<void> {
-    console.log("[MinimapDirection] Disposing...");
-
     // Stop tracking
     this.stop();
 
@@ -1068,7 +1007,6 @@ export class MinimapDirectionOverlay {
     this.clearTargets();
     this.minimapInfo = null;
     this.initialized = false;
-    console.log("[MinimapDirection] Disposed");
   }
 }
 

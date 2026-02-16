@@ -131,7 +131,6 @@ export class RealRenderer {
                 let unimeta = this.getUniformbindings(render, prog);
                 progdata = { prog, unimeta };
             } else {
-                console.warn("realrender program compile failed", verterr, fragerr, linkerr);
                 prog = null;
             }
             progmeta = { data: progdata, verterr, fragerr, linkerr };
@@ -278,7 +277,6 @@ export class RealRenderer {
         let tex = this.textures.get(sampler.base);
         if (!tex) {
             let gl = this.gl;
-            console.log("loading texture " + sampler.texid);
             tex = gl.createTexture()!;
             gl.bindTexture(gl.TEXTURE_2D, tex);
             let format = sampler.base.formatid == 35919 ? gl.SRGB8_ALPHA8 : gl.RGBA;
@@ -286,7 +284,6 @@ export class RealRenderer {
                 let img = sampler.capture(0, 0, sampler.width, sampler.height);
                 gl.texImage2D(gl.TEXTURE_2D, 0, format, sampler.width, sampler.height, gl.NONE, gl.RGBA, gl.UNSIGNED_BYTE, img);
             } else {
-                console.log(`using dummy texture for id: ${sampler.base.texid} (${sampler.width}x${sampler.height}) format: ${sampler.base.formatid.toString(16)}`);
                 let dummydata = new Uint8Array(sampler.width * sampler.height * 4);
                 gl.texImage2D(gl.TEXTURE_2D, 0, format, sampler.width, sampler.height, gl.NONE, gl.RGBA, gl.UNSIGNED_BYTE, dummydata);
             }
@@ -301,7 +298,6 @@ export class RealRenderer {
         let raw = render.raw;
         let gl = this.gl;
         if (this.width != raw.viewport.width || this.height != raw.viewport.height) {
-            console.warn("viewports do not match");
             return;
         }
         let progmetaentry = this.getProgram(render);
@@ -404,13 +400,6 @@ export class RealRenderer {
                 if (isFinite(res.near)) { far = Math.max(far, res.far); }
             }
             this.measuredDepthRange = [near, far];
-
-            // todo remove
-            let depth = this.measuredDepthRange;
-            let normnear = (depth[0] - this.depthrange[0]) / (this.depthrange[1] - this.depthrange[0]);
-            let normgap = (depth[1] - depth[0]) / (this.depthrange[1] - this.depthrange[0]);
-            console.log("depth", +near.toFixed(3), +far.toFixed(3), "norm", +normnear.toFixed(3), +(normnear + normgap).toFixed(3));
-
         }
         return this.measuredDepthRange!;
     }
@@ -491,7 +480,6 @@ export class RealRenderer {
         let matchlist: HittestResult[] = [];
         let raw = render.raw;
         if (this.width != raw.viewport.width || this.height != raw.viewport.height) {
-            console.warn("viewports do not match");
             return matchlist;
         }
 
