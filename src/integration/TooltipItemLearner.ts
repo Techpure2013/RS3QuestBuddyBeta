@@ -148,7 +148,13 @@ export class TooltipItemLearner {
   private learnedItems: Map<number, LearnedItem> = new Map(); // keyed by iconHash
   private pHashIndex: Map<string, LearnedItem> = new Map();   // keyed by pHash for cross-session lookup
   private listeners: Set<(item: LearnedItem) => void> = new Set();
-  private pollTimer: ReturnType<typeof setInterval> | null = null;
+  // Smart polling state
+  private pollTimeoutId: ReturnType<typeof setTimeout> | null = null;
+  private isPolling: boolean = false;
+  private baseIntervalMs: number = 500;
+  private lastPolledMousePos: { x: number; y: number } | null = null;
+  private consecutiveEmptyFrames: number = 0;
+  private mouseSkipCount: number = 0; // throttle "mouse not moved" log
 
   // Track last mouse position that was inside the inventory grid.
   // When tooltip lingers after cursor moves away, we use this to determine
@@ -2670,28 +2676,109 @@ export class TooltipItemLearner {
    * Start automatic tooltip learning
    */
   startPolling(intervalMs: number = 500): void {
-    if (this.pollTimer) this.stopPolling();
+    if (this.isPolling) this.stopPolling();
+    this.baseIntervalMs = intervalMs;
+    this.isPolling = true;
+    this.consecutiveEmptyFrames = 0;
+    this.lastPolledMousePos = null;
+    this.mouseSkipCount = 0;
+    console.log(`[TooltipItemLearner] Started smart polling (base: ${intervalMs}ms)`);
+    this.scheduleNextPoll(0); // Start immediately
+  }
 
-    this.pollTimer = setInterval(async () => {
-      try {
-        await this.detectAndLearn();
-      } catch (err) {
-        console.error('[TooltipItemLearner] Detection error:', err);
+  /**
+   * Schedule the next poll iteration after a delay.
+   * Uses setTimeout instead of setInterval to prevent overlapping calls.
+   */
+  private scheduleNextPoll(delayMs: number): void {
+    if (!this.isPolling) return;
+    this.pollTimeoutId = setTimeout(() => this.pollOnce(), delayMs);
+  }
+
+  /**
+   * Single poll iteration with mouse-movement debounce and adaptive timing.
+   * Called by the self-scheduling setTimeout loop.
+   */
+  private async pollOnce(): Promise<void> {
+    if (!this.isPolling) return;
+
+    try {
+      // ── Mouse movement debounce (cheap check before expensive GPU capture) ──
+      const currentMouse = this.glBridge.getMousePositionGL();
+      let mouseMoved = true;
+
+      if (currentMouse && this.lastPolledMousePos) {
+        const dx = currentMouse.x - this.lastPolledMousePos.x;
+        const dy = currentMouse.y - this.lastPolledMousePos.y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        mouseMoved = dist > 3;
       }
-    }, intervalMs);
 
-    console.log(`[TooltipItemLearner] Started polling every ${intervalMs}ms`);
+      if (currentMouse) {
+        this.lastPolledMousePos = { x: currentMouse.x, y: currentMouse.y };
+      }
+
+      // If mouse hasn't moved AND we had no tooltip recently, skip the expensive capture
+      if (!mouseMoved && this.consecutiveEmptyFrames > 0) {
+        this.mouseSkipCount++;
+        // Throttled log: every 10th skip to avoid spam
+        if (this.mouseSkipCount % 10 === 1) {
+          console.log(`[TooltipItemLearner] Skipping poll — mouse not moved (${this.mouseSkipCount} skips)`);
+        }
+        this.scheduleNextPoll(this.getAdaptiveDelay());
+        return;
+      }
+
+      // Mouse moved — reset skip counter and empty frames for responsive re-check
+      if (mouseMoved && this.consecutiveEmptyFrames > 5) {
+        this.consecutiveEmptyFrames = 0;
+      }
+      this.mouseSkipCount = 0;
+
+      // ── Run the expensive detection ──
+      const result = await this.detectAndLearn();
+
+      // ── Track consecutive empty frames for adaptive rate ──
+      if (result.isVisible) {
+        this.consecutiveEmptyFrames = 0;
+      } else {
+        this.consecutiveEmptyFrames++;
+      }
+    } catch (err) {
+      console.error('[TooltipItemLearner] Detection error:', err);
+    }
+
+    // Schedule next iteration with adaptive delay
+    this.scheduleNextPoll(this.getAdaptiveDelay());
+  }
+
+  /**
+   * Compute the next poll delay based on how many consecutive frames
+   * had no tooltip detected. Slows down when idle, speeds up when active.
+   *
+   *   0-5 empty frames  → base interval (fast tracking)
+   *   6-20 empty frames → 2x base, capped at 1000ms (user probably not hovering)
+   *   20+ empty frames  → 4x base, capped at 2000ms (idle, conserve resources)
+   */
+  private getAdaptiveDelay(): number {
+    if (this.consecutiveEmptyFrames <= 5) return this.baseIntervalMs;
+    if (this.consecutiveEmptyFrames <= 20) return Math.min(this.baseIntervalMs * 2, 1000);
+    return Math.min(this.baseIntervalMs * 4, 2000);
   }
 
   /**
    * Stop automatic tooltip learning
    */
   stopPolling(): void {
-    if (this.pollTimer) {
-      clearInterval(this.pollTimer);
-      this.pollTimer = null;
-      console.log('[TooltipItemLearner] Stopped polling');
+    if (this.pollTimeoutId) {
+      clearTimeout(this.pollTimeoutId);
+      this.pollTimeoutId = null;
     }
+    this.isPolling = false;
+    this.consecutiveEmptyFrames = 0;
+    this.lastPolledMousePos = null;
+    this.mouseSkipCount = 0;
+    console.log('[TooltipItemLearner] Stopped polling');
     // Clear transient state to free memory
     this.slotVotes.clear();
     this.namePHashCandidates.clear();
