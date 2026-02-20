@@ -33,6 +33,13 @@ const rendererConfig = {
 		historyApiFallback: true,
 		proxy: [
 			{
+				context: ["/api/heightdata"],
+				target: "https://runeapps.org",
+				changeOrigin: true,
+				secure: true,
+				pathRewrite: { "^/api/heightdata": "/maps/mapheightrender" },
+			},
+			{
 				context: ["/api"],
 				target: "https://techpure.dev",
 				changeOrigin: true,

@@ -51,12 +51,12 @@ interface QuestOverlayState {
 	resolutionChangeCleanup: (() => void) | null; // Cleanup function for resolution change listener
 }
 
-// How long before an NPC is considered "out of view" (5 seconds)
-const NPC_VISIBILITY_TIMEOUT = 5000;
-// How often to check NPC visibility (2 seconds)
-const VISIBILITY_CHECK_INTERVAL = 2000;
-// How often to check player proximity to static overlays (3 seconds)
-const PROXIMITY_CHECK_INTERVAL = 3000;
+// How long before an NPC is considered "out of view" (10 seconds)
+const NPC_VISIBILITY_TIMEOUT = 10000;
+// How often to check NPC visibility (5 seconds)
+const VISIBILITY_CHECK_INTERVAL = 5000;
+// How often to check player proximity to static overlays (10 seconds)
+const PROXIMITY_CHECK_INTERVAL = 10000;
 // Distance in tiles to trigger NPC scan when player approaches wander radius
 const PROXIMITY_SCAN_DISTANCE = 30;
 
@@ -208,7 +208,7 @@ const COLORS = {
 };
 
 // Scan interval in ms
-const SCAN_INTERVAL = 2000;
+const SCAN_INTERVAL = 5000;
 
 // Debug flags - set to true to disable specific overlay types for testing
 const DEBUG_DISABLE_ALL_OVERLAYS = false;
@@ -216,8 +216,56 @@ const DEBUG_DISABLE_ALL_OVERLAYS = false;
 // Individual debug flags for testing
 const DEBUG_DISABLE_NPC_ARROWS = false;
 let wanderRadiusEnabled = true;
-export function setWanderRadiusEnabled(enabled: boolean): void {
+export async function setWanderRadiusEnabled(enabled: boolean): Promise<void> {
 	wanderRadiusEnabled = enabled;
+
+	if (!enabled) {
+		// Toggled OFF: Remove all existing wander-radius overlays
+		const wanderOverlays = state.activeOverlays.filter(o => o.type === "wander-radius");
+
+		for (const overlay of wanderOverlays) {
+			if (typeof overlay.id !== "number") {
+				try {
+					overlay.id.stop();
+				} catch (e) {
+					// Ignore errors when stopping
+				}
+			}
+		}
+
+		// Remove wander overlays from active list
+		state.activeOverlays = state.activeOverlays.filter(o => o.type !== "wander-radius");
+
+		// Clear pending wander NPCs
+		state.pendingWanderNpcs = [];
+	} else {
+		// Toggled ON: If there's an active step, draw wander radius for all NPCs that have it
+		if (state.currentStep && state.isActive && state.currentStep.highlights?.npc) {
+			for (const npc of state.currentStep.highlights.npc) {
+				if (!npc.wanderRadius) continue;
+
+				// Check if we already have a wander overlay for this NPC
+				const existingWander = state.activeOverlays.find(
+					o => o.type === "wander-radius" && o.npcId === npc.id
+				);
+				if (existingWander) continue;
+
+				// Try to draw wander radius
+				const handle = await drawWanderRadiusFilled(npc);
+				if (handle) {
+					state.activeOverlays.push(handle);
+				} else {
+					// Failed to draw - add to pending list for retry
+					state.pendingWanderNpcs.push(npc);
+				}
+			}
+
+			// Start scanning interval if we have pending items
+			if (state.pendingWanderNpcs.length > 0 && !state.scanInterval) {
+				state.scanInterval = setInterval(scanForPendingNpcs, SCAN_INTERVAL);
+			}
+		}
+	}
 }
 const DEBUG_DISABLE_OBJECT_TILES = false;
 
@@ -463,6 +511,10 @@ async function scanForPendingNpcs(): Promise<void> {
 		return;
 	}
 
+	// Skip expensive GPU operations when compass overlay is disabled
+	// Compass roses are the only NPC overlays that use render captures
+	if (!state.compassOverlayEnabled) return;
+
 	// Skip expensive NPC scanning if no pending NPCs (compass roses)
 	// Wander radius and objects are handled by retryPendingOverlays above
 	if (state.pendingNpcs.length === 0) {
@@ -543,6 +595,7 @@ function stopNpcScanning(): void {
  */
 async function checkNpcVisibility(): Promise<void> {
 	if (!state.isActive || !state.npcOverlay) return;
+	if (!state.compassOverlayEnabled) return;
 
 	const vaoAttachedOverlays = state.activeOverlays.filter(
 		o => o.type === "npc-arrow" && o.attachmentType === "vao" && o.vaoId !== undefined
@@ -679,6 +732,7 @@ async function switchToStaticOverlay(overlay: OverlayHandle): Promise<void> {
  */
 async function tryReattachStaticOverlays(): Promise<void> {
 	if (!state.isActive || !state.npcOverlay) return;
+	if (!state.compassOverlayEnabled) return;
 
 	const staticOverlays = state.activeOverlays.filter(
 		o => o.type === "npc-arrow" && o.attachmentType === "static" && o.npcInfo
@@ -840,6 +894,7 @@ function getDistanceToWanderRadius(npc: NpcHighlight): number | null {
  */
 async function checkPlayerProximityToStaticOverlays(): Promise<void> {
 	if (!state.isActive || !state.npcOverlay) return;
+	if (!state.compassOverlayEnabled) return;
 
 	const staticOverlays = state.activeOverlays.filter(
 		o => o.type === "npc-arrow" && o.attachmentType === "static" && o.npcInfo
@@ -960,8 +1015,8 @@ async function drawWanderRadiusFilled(npc: NpcHighlight): Promise<OverlayHandle 
 			npcColor: [255, 50, 50, 255],
 			thickness: 0.07,
 			floor: npc.floor ?? 0,
-			// Skip if chunk not visible - will be retried when player gets closer
-			skipIfNotVisible: true
+			// Use fallback rendering if chunk not visible - ensures overlay always shows
+			skipIfNotVisible: false
 		});
 
 		if (overlayId !== null) {

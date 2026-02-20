@@ -4,8 +4,6 @@
  * Dev tools and external system integrations.
  */
 
-// Dev Tools
-export { SpriteDiscovery } from "./SpriteDiscovery";
 
 // GLBridge adapter for QuestStateEngine
 export {
@@ -49,8 +47,6 @@ export {
   type CalibrationState,
 } from './TooltipItemLearner';
 
-// Test utilities (exposes window.testTooltipLearner, window.quickTestTooltip)
-import './test-tooltip-learner';
 
 // Dialog Bridge adapter for QuestStateEngine
 export {

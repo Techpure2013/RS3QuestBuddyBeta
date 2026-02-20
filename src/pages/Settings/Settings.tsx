@@ -188,7 +188,7 @@ const Settings: React.FC = () => {
 								const learner = await getOrCreateTooltipLearner();
 								if (learner) {
 									if (checked) {
-										learner.startPolling(500);
+										learner.startPolling(1000);
 										console.log('[Settings] Inventory tracking started');
 									} else {
 										learner.stopPolling();

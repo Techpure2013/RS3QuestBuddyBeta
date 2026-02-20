@@ -7,8 +7,6 @@ import { usePlayerStoreInit } from "./../state/usePlayerSelector";
 import { ToastProvider } from "./../Components/Toast/useToast";
 import { AppWithVersionCheck } from "./Entrance Components/AppWithVersionCheck";
 import { deactivateStepOverlays, clearNpcHashCache, startPlayerTracking, stopPlayerTracking } from "./../gl";
-import { SpriteDiscovery } from "./../integration";
-import "./../integration/test-tooltip-learner";
 import { isGlInjectionAvailable } from "../api/glInjection";
 
 const isDev = window.location.hostname === "127.0.0.1" || window.location.hostname === "localhost";
@@ -54,7 +52,7 @@ function App() {
 						import('./../integration').then(({ getOrCreateTooltipLearner }) => {
 							getOrCreateTooltipLearner().then((learner) => {
 								if (cancelled) return;
-								learner.startPolling(500);
+								learner.startPolling(1000);
 								console.log(`[App] Inventory tracking auto-started (attempt ${attempt})`);
 							}).catch((e) => {
 								if (cancelled) return;
@@ -98,7 +96,6 @@ function App() {
 						<BrowserRouter basename={isDev ? "/" : "/RS3QuestBuddyBeta"}>
 							<Routes>
 								<Route path="/" element={<QuestCarousel />} />
-								<Route path="/dev/sprites" element={<SpriteDiscovery />} />
 								<Route path="/:questName" element={<QuestPage />} />
 								<Route path="*" element={<Navigate to="/" />} />
 							</Routes>

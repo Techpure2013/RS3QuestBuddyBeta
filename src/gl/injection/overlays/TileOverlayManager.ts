@@ -963,11 +963,14 @@ function findBestFloorRender(
  * MATCHES tilemarkers.ts EXACTLY
  */
 async function createMarkerOverlay(marker: RectMarker, floor: patchrs.RenderInvocation, chunkX: number, chunkZ: number): Promise<patchrs.GlOverlay | null> {
+    // Extract floor render's model Y to match game's terrain elevation
+    const floorChunkInfo = getChunkFromRender(floor);
+    const floorModelY = floorChunkInfo ? floorChunkInfo.modelY : 0;
+
     // Fetch height data for this chunk
     const heightData = await fetchHeightData(chunkX, chunkZ, marker.floor ?? 0);
     if (!heightData) {
-        console.warn("[TileOverlay] Could not load height data");
-        return null;
+        console.warn("[TileOverlay] Height data unavailable, using flat fallback");
     }
 
     // Build mesh data - EXACTLY like tilemarkers.ts loadWalkmeshBlocking
@@ -984,6 +987,9 @@ async function createMarkerOverlay(marker: RectMarker, floor: patchrs.RenderInvo
     const rootz = -CHUNK_SIZE / 2 * TILE_SIZE;
 
     let vertexindex = 0;
+
+    // Helper to safely get height values (returns 0 if heightData unavailable)
+    const getHeight = (index: number): number => heightData ? heightData[index] : 0;
 
     // EXACT copy of tilemarkers.ts writevertex function
     const writevertex = (tilex: number, tilez: number, subx: number, subz: number, dy: number, vertcol: number[], rotation: number): number => {
@@ -1007,10 +1013,10 @@ async function createMarkerOverlay(marker: RectMarker, floor: patchrs.RenderInvo
         const tileindex = (clampedTileX + clampedTileZ * CHUNK_SIZE) * 5;
 
         // Bilinear interpolation - EXACTLY like tilemarkers.ts
-        const y00 = heightData[tileindex + 0] * heightScaling * (1 - dx) * (1 - dz);
-        const y01 = heightData[tileindex + 1] * heightScaling * dx * (1 - dz);
-        const y10 = heightData[tileindex + 2] * heightScaling * (1 - dx) * dz;
-        const y11 = heightData[tileindex + 3] * heightScaling * dx * dz;
+        const y00 = getHeight(tileindex + 0) * heightScaling * (1 - dx) * (1 - dz);
+        const y01 = getHeight(tileindex + 1) * heightScaling * dx * (1 - dz);
+        const y10 = getHeight(tileindex + 2) * heightScaling * (1 - dx) * dz;
+        const y11 = getHeight(tileindex + 3) * heightScaling * dx * dz;
 
         pos.push(
             (tilex + dx) * TILE_SIZE + rootx,
@@ -1127,10 +1133,10 @@ async function createMarkerOverlay(marker: RectMarker, floor: patchrs.RenderInvo
         { location: 6, name: "aColor", type: GL_UNSIGNED_BYTE, length: 3 }
     ], uniforms.args);
 
-    // Position matrix - place at chunk center (like tilemarkers.ts)
+    // Position matrix - place at chunk center, matching floor render's Y elevation
     uniforms.mappings.uModelMatrix.write(positionMatrix(
         (chunkX + 0.5) * TILE_SIZE * CHUNK_SIZE,
-        TILE_SIZE / 32,
+        floorModelY + TILE_SIZE / 32,
         (chunkZ + 0.5) * TILE_SIZE * CHUNK_SIZE
     ));
 
@@ -1356,17 +1362,19 @@ async function createNPCWanderOverlay(
     chunkX: number,
     chunkZ: number
 ): Promise<patchrs.GlOverlay | null> {
+    // Extract floor render's model Y to match game's terrain elevation
+    const floorChunkInfo = getChunkFromRender(floor);
+    const floorModelY = floorChunkInfo ? floorChunkInfo.modelY : 0;
+
     const heightData = await fetchHeightData(chunkX, chunkZ, marker.floor ?? 0);
     if (!heightData) {
-        console.warn("[TileOverlay] Could not load height data for NPC wander overlay");
-        return null;
+        console.warn("[TileOverlay] Height data unavailable, using flat fallback");
     }
 
     const pos: number[] = [];
     const colorData: number[] = [];
     const indices: number[] = [];
 
-    const heightScaling = TILE_SIZE / 32;
     const rootx = -CHUNK_SIZE / 2 * TILE_SIZE;
     const rootz = -CHUNK_SIZE / 2 * TILE_SIZE;
 
@@ -1382,11 +1390,13 @@ async function createNPCWanderOverlay(
         // dir: 0=south, 1=east, 2=north, 3=west
         // Each wall is a 3D box along the tile edge
 
-        // Get base height at the tile corners
+        // Get base height using bilinear interpolation, subtract 5*TILE_SIZE/32
+        // to align wall base flush with game terrain surface
         const clampedX = Math.max(0, Math.min(CHUNK_SIZE - 1, x));
         const clampedZ = Math.max(0, Math.min(CHUNK_SIZE - 1, z));
-        const tileindex = (clampedX + clampedZ * CHUNK_SIZE) * 5;
-        const baseHeight = heightData[tileindex + 0] * heightScaling;
+        const baseHeight = heightData
+            ? getTerrainHeight(heightData, clampedX, clampedZ, 0.5, 0.5) - 5 * TILE_SIZE / 32
+            : 0;
 
         const thickness = wallThickness * TILE_SIZE;
 
@@ -1529,8 +1539,9 @@ async function createNPCWanderOverlay(
     const writeCornerFill = (x: number, z: number, vertcol: number[], corner: number): void => {
         const clampedX = Math.max(0, Math.min(CHUNK_SIZE - 1, x));
         const clampedZ = Math.max(0, Math.min(CHUNK_SIZE - 1, z));
-        const tileindex = (clampedX + clampedZ * CHUNK_SIZE) * 5;
-        const baseHeight = heightData[tileindex + 0] * heightScaling;
+        const baseHeight = heightData
+            ? getTerrainHeight(heightData, clampedX, clampedZ, 0.5, 0.5) - 5 * TILE_SIZE / 32
+            : 0;
 
         const thickness = wallThickness * TILE_SIZE;
         const y0 = baseHeight;
@@ -1686,10 +1697,10 @@ async function createNPCWanderOverlay(
         { location: 6, name: "aColor", type: GL_UNSIGNED_BYTE, length: 4 }  // RGBA
     ], uniforms.args);
 
-    // Position matrix - place at chunk center
+    // Position matrix - place at chunk center, matching floor render's Y elevation
     uniforms.mappings.uModelMatrix.write(positionMatrix(
         (chunkX + 0.5) * TILE_SIZE * CHUNK_SIZE,
-        TILE_SIZE / 32,
+        floorModelY + TILE_SIZE / 32,
         (chunkZ + 0.5) * TILE_SIZE * CHUNK_SIZE
     ));
 
@@ -1743,12 +1754,17 @@ export async function addNPCWanderMarker(marker: NPCWanderMarker): Promise<patch
     const targetChunkZ = Math.floor(centerLat / CHUNK_SIZE);
     const chunkKey = `${targetChunkX},${targetChunkZ}`;
 
+    console.log(`[WanderDebug] Target chunk: ${targetChunkX},${targetChunkZ}, NPC at lat=${marker.npcLocation.lat.toFixed(1)}, lng=${marker.npcLocation.lng.toFixed(1)}, floor=${marker.floor ?? 0}`);
+
     // Try to find the chunk immediately - use floor selection to pick ground level
     try {
         const renders = await patchrs.native.recordRenderCalls({ maxframes: 1,
             features: ["uniforms"],
             skipProgramMask: wrongProgramMask
         });
+
+        const floorRenderCount = renders.filter(r => r.program.inputs.find(q => q.name === "aMaterialSettingsSlotXY3")).length;
+        console.log(`[WanderDebug] Recorded ${renders.length} renders, ${floorRenderCount} are floor programs`);
 
         // Mark non-floor programs
         for (const render of renders) {
@@ -1757,11 +1773,26 @@ export async function addNPCWanderMarker(marker: NPCWanderMarker): Promise<patch
             }
         }
 
+        // Log which chunks ARE visible in the renders
+        for (const render of renders) {
+            if (render.program.inputs.find(q => q.name === "aMaterialSettingsSlotXY3")) {
+                const chunkInfo = getChunkFromRender(render);
+                if (chunkInfo) {
+                    console.log(`[WanderDebug]   Floor render: chunk ${chunkInfo.chunkX},${chunkInfo.chunkZ} modelY=${chunkInfo.modelY.toFixed(1)}`);
+                }
+            }
+        }
+
         // Find best floor render (lowest Y for floor 0)
         const targetFloor = marker.floor ?? 0;
         const bestRender = findBestFloorRender(renders, targetChunkX, targetChunkZ, targetFloor);
         if (bestRender) {
-            return await createNPCWanderOverlay(marker, bestRender.render, bestRender.chunkX, bestRender.chunkZ);
+            console.log(`[WanderDebug] Found floor render for chunk ${bestRender.chunkX},${bestRender.chunkZ}`);
+            const overlay = await createNPCWanderOverlay(marker, bestRender.render, bestRender.chunkX, bestRender.chunkZ);
+            console.log(`[WanderDebug] createNPCWanderOverlay returned: ${overlay ? 'overlay created' : 'null'}`);
+            return overlay;
+        } else {
+            console.log(`[WanderDebug] No floor render found for target chunk ${targetChunkX},${targetChunkZ}`);
         }
     } catch (e) {
         console.warn("[TileOverlay] Error checking immediate renders for NPC wander:", e);
@@ -1771,6 +1802,8 @@ export async function addNPCWanderMarker(marker: NPCWanderMarker): Promise<patch
     if (marker.skipIfNotVisible) {
         return null;
     }
+
+    console.log(`[WanderDebug] Falling back to addRectMarker`);
 
     // Fall back to simple rect marker if chunk not found immediately
     return addRectMarker({
@@ -1797,6 +1830,10 @@ async function createObjectTilesBatchedOverlay(
     chunkX: number,
     chunkZ: number
 ): Promise<patchrs.GlOverlay | null> {
+    // Extract floor render's model Y to match game's terrain elevation
+    const floorChunkInfo = getChunkFromRender(floor);
+    const floorModelY = floorChunkInfo ? floorChunkInfo.modelY : 0;
+
     const heightData = await fetchHeightData(chunkX, chunkZ, group.floor ?? 0);
     if (!heightData) {
         console.warn("[TileOverlay] Could not load height data for batched object tiles");
@@ -1971,7 +2008,7 @@ async function createObjectTilesBatchedOverlay(
 
     uniforms.mappings.uModelMatrix.write(positionMatrix(
         (chunkX + 0.5) * TILE_SIZE * CHUNK_SIZE,
-        TILE_SIZE / 32,
+        floorModelY + TILE_SIZE / 32,
         (chunkZ + 0.5) * TILE_SIZE * CHUNK_SIZE
     ));
 
@@ -2019,6 +2056,10 @@ async function createTextLabelOverlay(
     chunkZ: number,
     floorLevel: number = 0
 ): Promise<patchrs.GlOverlay | null> {
+    // Extract floor render's model Y to match game's terrain elevation
+    const floorChunkInfo = getChunkFromRender(floor);
+    const floorModelY = floorChunkInfo ? floorChunkInfo.modelY : 0;
+
     const heightData = await fetchHeightData(chunkX, chunkZ, floorLevel);
     if (!heightData) {
         console.warn("[TileOverlay] Could not load height data for text label");
@@ -2082,7 +2123,7 @@ async function createTextLabelOverlay(
 
     uniforms.mappings.uModelMatrix.write(positionMatrix(
         (chunkX + 0.5) * TILE_SIZE * CHUNK_SIZE,
-        TILE_SIZE / 32,
+        floorModelY + TILE_SIZE / 32,
         (chunkZ + 0.5) * TILE_SIZE * CHUNK_SIZE
     ));
 
@@ -2239,6 +2280,10 @@ async function createPathTilesBatchedOverlay(
     animated: boolean = false
 ): Promise<patchrs.GlOverlay | null> {
     if (tiles.length < 2 || !patchrs.native) return null;
+
+    // Extract floor render's model Y to match game's terrain elevation
+    const floorChunkInfo = getChunkFromRender(floor);
+    const floorModelY = floorChunkInfo ? floorChunkInfo.modelY : 0;
 
     const floorLevel = tiles[0].floor;
     const heightData = await fetchHeightData(chunkX, chunkZ, floorLevel);
@@ -2511,10 +2556,10 @@ async function createPathTilesBatchedOverlay(
             { location: 6, name: "aColor", type: GL_UNSIGNED_BYTE, length: 3 }
         ], uniforms.args);
 
-    // Position matrix - place at chunk center
+    // Position matrix - place at chunk center, matching floor render's Y elevation
     uniforms.mappings.uModelMatrix.write(positionMatrix(
         (chunkX + 0.5) * TILE_SIZE * CHUNK_SIZE,
-        TILE_SIZE / 32,
+        floorModelY + TILE_SIZE / 32,
         (chunkZ + 0.5) * TILE_SIZE * CHUNK_SIZE
     ));
 
