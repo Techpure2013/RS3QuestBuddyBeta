@@ -7,7 +7,8 @@ export const CHUNK_SIZE = 64;
 export const TILE_SIZE = 512;
 export const HEIGHT_SCALING = TILE_SIZE / 32;
 
-const HEIGHT_DATA_ENDPOINT = "https://runeapps.org/maps/mapheightrender/";
+const HEIGHT_DATA_ENDPOINT = "https://runeapps.org/s3/map4/live/";
+const HEIGHT_DATA_FALLBACK = "https://runeapps.org/s3/map4/1764321618/";
 
 // Cache for loaded height data
 const heightCache = new Map<string, Uint16Array | null>();
@@ -43,10 +44,16 @@ export async function fetchHeightData(
     // Start new fetch
     const fetchPromise = (async (): Promise<Uint16Array | null> => {
         try {
-            const url = `${HEIGHT_DATA_ENDPOINT}height-${level}/${chunkX}-${chunkZ}.bin.gz`;
+            const path = `heightmesh-${level}/${chunkX}-${chunkZ}.bin`;
+            const url = `${HEIGHT_DATA_ENDPOINT}${path}`;
             console.log(`[HeightData] Fetching ${url}`);
 
-            const res = await fetch(url);
+            let res = await fetch(url);
+            if (res.status === 403) {
+                const fallbackUrl = `${HEIGHT_DATA_FALLBACK}${path}`;
+                console.log(`[HeightData] /live/ returned 403, trying versioned fallback: ${fallbackUrl}`);
+                res = await fetch(fallbackUrl);
+            }
             if (!res.ok) {
                 console.warn(`[HeightData] Failed to fetch height data for chunk ${chunkX},${chunkZ}: ${res.status}`);
                 heightCache.set(key, null);
@@ -54,8 +61,12 @@ export async function fetchHeightData(
             }
 
             const data = new Uint16Array(await res.arrayBuffer());
+            const expectedLen = CHUNK_SIZE * CHUNK_SIZE * 5; // 4 corner heights + 1 collision flag per tile
+            if (data.length !== expectedLen) {
+                console.warn(`[HeightData] Unexpected data size for ${chunkX},${chunkZ}: got ${data.length} elements, expected ${expectedLen} (stride mismatch?)`);
+            }
             heightCache.set(key, data);
-            console.log(`[HeightData] Loaded height data for chunk ${chunkX},${chunkZ}`);
+            console.log(`[HeightData] Loaded height data for chunk ${chunkX},${chunkZ} (${data.length} elements)`);
             return data;
         } catch (e) {
             console.error(`[HeightData] Error fetching height data:`, e);

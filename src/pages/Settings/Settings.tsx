@@ -120,6 +120,12 @@ const Settings: React.FC = () => {
 					checked={settings.autoScrollEnabled}
 					onChange={toggleAutoScroll}
 				/>
+				<Switch
+					styles={{ label: { color: hasTextColor ? settings.textColor : "" } }}
+					label={settings.richTextEnabled ? "Rich Text Styles On" : "Rich Text Styles Off"}
+					checked={settings.richTextEnabled}
+					onChange={(e) => updateSetting("richTextEnabled", e.currentTarget.checked)}
+				/>
 
 				<Select
 					label="Background Theme"
@@ -212,6 +218,22 @@ const Settings: React.FC = () => {
 					textColor={hasTextColor ? settings.textColor : undefined}
 				/>
 			</Stack>
+
+			<Button
+				mt="xs"
+				variant="outline"
+				color="red"
+				onClick={() => {
+					updateSetting("textColor", "");
+					updateSetting("labelColor", "");
+					updateSetting("buttonColor", "");
+					updateSetting("textSwatches", []);
+					updateSetting("labelSwatches", []);
+					updateSetting("buttonSwatches", []);
+				}}
+			>
+				Clear All Colors
+			</Button>
 
 			<Accordion mt="md">
 				<Accordion.Item key="text-color" value="Color Your Text">

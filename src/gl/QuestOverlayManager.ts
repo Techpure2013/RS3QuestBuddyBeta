@@ -60,6 +60,10 @@ const PROXIMITY_CHECK_INTERVAL = 10000;
 // Distance in tiles to trigger NPC scan when player approaches wander radius
 const PROXIMITY_SCAN_DISTANCE = 30;
 
+// Generation counter: incremented on each activateStepOverlays call.
+// In-flight parallel tasks check this to bail out if a newer activation superseded them.
+let activationGeneration = 0;
+
 let state: QuestOverlayState = {
 	isActive: false,
 	currentStep: null,
@@ -203,7 +207,7 @@ export function clearNpcHashCache(): void {
 // Colors for different overlay types
 const COLORS = {
 	npcArrow: [0, 255, 0, 255] as [number, number, number, number],
-	wanderRadiusFill: [0, 200, 200, 150] as [number, number, number, number],  // Cyan/teal
+	wanderRadiusFill: [0, 100, 255, 200] as [number, number, number, number],  // Blue outline
 	objectTile: [0, 128, 255, 200] as [number, number, number, number],
 };
 
@@ -1117,6 +1121,10 @@ export async function activateStepOverlays(
 
 	await deactivateStepOverlays();
 
+	// Increment generation — any in-flight tasks from a prior activation will
+	// see a stale gen and bail out, preventing IPC floods on rapid step switches.
+	const gen = ++activationGeneration;
+
 	state.currentStep = step;
 	state.isActive = true;
 	state.onNpcFound = options?.onNpcFound;
@@ -1124,42 +1132,42 @@ export async function activateStepOverlays(
 
 	const { npc: npcs, object: objects } = step.highlights;
 
-	// Process NPCs
-	for (const npc of npcs) {
-		// Try to highlight NPC if we have hash info
-		if (!DEBUG_DISABLE_NPC_ARROWS && npcHasHashes(npc)) {
-			const handle = await highlightNpcByHash(npc);
-			if (handle) {
-				state.activeOverlays.push(handle);
-			} else {
-				state.pendingNpcs.push(npc);
-			}
-		}
+	// Process NPCs and objects in PARALLEL — under IPC proxy, sequential awaits
+	// cause "1 by 1" slowness. Parallel lets the frame cache coalesce captures
+	// and height data fetches run concurrently.
+	const tasks: Promise<void>[] = [];
 
-		// Draw wander radius if available
+	for (const npc of npcs) {
+		if (!DEBUG_DISABLE_NPC_ARROWS && npcHasHashes(npc)) {
+			tasks.push(highlightNpcByHash(npc).then(handle => {
+				if (activationGeneration !== gen) return; // Superseded
+				if (handle) state.activeOverlays.push(handle);
+				else state.pendingNpcs.push(npc);
+			}).catch(e => console.warn("[QuestOverlay] NPC highlight error:", e)));
+		}
 		if (wanderRadiusEnabled && npc.wanderRadius) {
-			const handle = await drawWanderRadiusFilled(npc);
-			if (handle) {
-				state.activeOverlays.push(handle);
-			} else {
-				// Track for retry when player gets closer
-				state.pendingWanderNpcs.push(npc);
-			}
+			tasks.push(drawWanderRadiusFilled(npc).then(handle => {
+				if (activationGeneration !== gen) return; // Superseded
+				if (handle) state.activeOverlays.push(handle);
+				else state.pendingWanderNpcs.push(npc);
+			}).catch(e => console.warn("[QuestOverlay] Wander radius error:", e)));
 		}
 	}
 
-	// Process Objects
 	if (!DEBUG_DISABLE_OBJECT_TILES) {
 		for (const obj of objects) {
-			const handles = await drawObjectTiles(obj);
-			if (handles.length > 0) {
-				state.activeOverlays.push(...handles);
-			} else {
-				// Track for retry when player gets closer
-				state.pendingObjects.push(obj);
-			}
+			tasks.push(drawObjectTiles(obj).then(handles => {
+				if (activationGeneration !== gen) return; // Superseded
+				if (handles.length > 0) state.activeOverlays.push(...handles);
+				else state.pendingObjects.push(obj);
+			}).catch(e => console.warn("[QuestOverlay] Object tiles error:", e)));
 		}
 	}
+
+	await Promise.all(tasks);
+
+	// Don't start monitoring if this activation was superseded
+	if (activationGeneration !== gen) return false;
 
 	// Start scanning for any NPCs we couldn't find immediately
 	startNpcScanning();

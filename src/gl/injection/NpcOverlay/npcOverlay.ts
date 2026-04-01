@@ -3,6 +3,7 @@
  */
 
 import * as patchrs from "../util/patchrs_napi";
+import { captureWithStreamPause } from "../util/SharedRenderStream";
 import {
   getProgramMeta,
   getUniformValue,
@@ -452,7 +453,7 @@ export class NpcOverlay {
     if (filter?.includeTextures) {
       features.push("textures");
     }
-    const renders = await patchrs.native.recordRenderCalls({ maxframes: 1, features });
+    const renders = await captureWithStreamPause(() => patchrs.native.recordRenderCalls({ maxframes: 1, features }));
     const result = this.scanFromRenders(renders, filter);
     return result;
   }
@@ -590,7 +591,7 @@ export class NpcOverlay {
     // Only use textures when explicitly needed for texture capture
     const features: ("vertexarray" | "uniforms")[] = ["vertexarray", "uniforms"];
 
-    const renders = await patchrs.native.recordRenderCalls({ maxframes: 1, features });
+    const renders = await captureWithStreamPause(() => patchrs.native.recordRenderCalls({ maxframes: 1, features }));
 
     return this.scanGroupedFromRenders(renders, filter);
   }
@@ -651,7 +652,7 @@ export class NpcOverlay {
     // Try capturing multiple times if first attempt returns nothing
     let initialRenders: patchrs.RenderInvocation[] = [];
     for (let attempt = 0; attempt < 3; attempt++) {  // Reduced from 5 to 3
-      initialRenders = await patchrs.native.recordRenderCalls({ maxframes: 1, features: ["vertexarray", "uniforms"] });  // Removed "textures" to save memory
+      initialRenders = await captureWithStreamPause(() => patchrs.native.recordRenderCalls({ maxframes: 1, features: ["vertexarray", "uniforms"] }));  // Removed "textures" to save memory
       if (initialRenders.length > 0) break;
       await new Promise(resolve => setTimeout(resolve, 50 + attempt * 50));
     }
@@ -688,7 +689,7 @@ export class NpcOverlay {
       const delay = frame % 3 === 1 ? baseDelay * 1.5 : frame % 3 === 2 ? baseDelay * 2 : baseDelay;
       await new Promise(resolve => setTimeout(resolve, delay));
 
-      const frameRenders = await patchrs.native.recordRenderCalls({ maxframes: 1, features: ["vertexarray", "uniforms"] });
+      const frameRenders = await captureWithStreamPause(() => patchrs.native.recordRenderCalls({ maxframes: 1, features: ["vertexarray", "uniforms"] }));
       allOriginalFrameRenders.push(frameRenders);
       framesCaptured++;
       totalRenderCalls += frameRenders.length;
@@ -837,7 +838,7 @@ export class NpcOverlay {
       await new Promise(resolve => setTimeout(resolve, frameDelay));
 
       // NOTE: Removed "textures" - TextureSnapshots are massive memory hogs
-      const frameRenders = await patchrs.native.recordRenderCalls({ maxframes: 1, features: ["vertexarray", "uniforms"] });
+      const frameRenders = await captureWithStreamPause(() => patchrs.native.recordRenderCalls({ maxframes: 1, features: ["vertexarray", "uniforms"] }));
       let newMeshes = 0;
 
       for (const render of frameRenders) {
@@ -1833,7 +1834,7 @@ export class NpcOverlay {
     for (let frame = 0; frame < maxFrames; frame++) {
       if (frame > 0) await new Promise(r => setTimeout(r, 60));
 
-      const renders = await patchrs.native.recordRenderCalls({ maxframes: 1, features: ["vertexarray", "uniforms"] });
+      const renders = await captureWithStreamPause(() => patchrs.native.recordRenderCalls({ maxframes: 1, features: ["vertexarray", "uniforms"] }));
       allFrameRenders.push(renders);
       let newMeshes = 0;
 
@@ -2313,7 +2314,7 @@ export class NpcOverlay {
    * This captures everything with a model matrix and logs detailed info about each mesh.
    */
   async debugDumpAllMeshes(): Promise<void> {
-    const renders = await patchrs.native.recordRenderCalls({ maxframes: 1, features: ["vertexarray", "uniforms"] });
+    const renders = await captureWithStreamPause(() => patchrs.native.recordRenderCalls({ maxframes: 1, features: ["vertexarray", "uniforms"] }));
 
     const meshes: Array<{
       vaoId: number;
@@ -2382,7 +2383,7 @@ export class NpcOverlay {
    */
   async scanAllUnfiltered(): Promise<NpcMeshGroup[]> {
     // NOTE: Removed "textures" - TextureSnapshots are massive memory hogs (can grow to 500MB+)
-    const renders = await patchrs.native.recordRenderCalls({ maxframes: 1, features: ["vertexarray", "uniforms"] });
+    const renders = await captureWithStreamPause(() => patchrs.native.recordRenderCalls({ maxframes: 1, features: ["vertexarray", "uniforms"] }));
 
     // Group by position (same logic as scanGroupedFromRenders but minimal filtering)
     const tolerance = 0.15;
@@ -2505,10 +2506,10 @@ export class NpcOverlay {
   async scanRenderedVaoIds(vaoIds?: Set<number>): Promise<Set<number>> {
     // Use features: [] to avoid capturing heavy vertex arrays and textures
     // We still get render.program which allows us to filter by program metadata
-    const renders = await patchrs.native.recordRenderCalls({
+    const renders = await captureWithStreamPause(() => patchrs.native.recordRenderCalls({
       maxframes: 1,
       features: [],  // Minimal - no vertex arrays, no uniforms, no textures
-    });
+    }));
 
     const renderedVaoIds = new Set<number>();
 
@@ -2567,10 +2568,10 @@ export class NpcOverlay {
    */
   async scanRenderedVaoIdsWithFramebuffers(vaoIds?: Set<number>): Promise<Map<number, number>> {
     // Use features: [] to avoid capturing heavy vertex arrays and textures
-    const renders = await patchrs.native.recordRenderCalls({
+    const renders = await captureWithStreamPause(() => patchrs.native.recordRenderCalls({
       maxframes: 1,
       features: [],  // Minimal - no vertex arrays, no uniforms, no textures
-    });
+    }));
 
     const result = new Map<number, number>();
 

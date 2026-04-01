@@ -293,8 +293,13 @@ class FloorOverlayChunk {
     settings: OverlaySettings;
 
     async load() {
-        let endpoint = "https://runeapps.org/maps/mapheightrender/";
-        let res = await fetch(`${endpoint}height-${this.chunklevel}/${this.chunkx}-${this.chunkz}.bin.gz`);
+        let endpoint = "https://runeapps.org/s3/map4/live/";
+        let fallbackEndpoint = "https://runeapps.org/s3/map4/1764321618/";
+        let path = `heightmesh-${this.chunklevel}/${this.chunkx}-${this.chunkz}.bin`;
+        let res = await fetch(`${endpoint}${path}`);
+        if (res.status === 403) {
+            res = await fetch(`${fallbackEndpoint}${path}`);
+        }
         if (!res.ok) {
             this.failed = true;
             this.loaded = true;
@@ -357,7 +362,8 @@ class FloorOverlayChunk {
 }
 
 export function floorTracker(settings: OverlaySettings) {
-    let knownProgs = new WeakMap<patchrs.GlProgram, {}>();
+    let knownFloorProgs = new Set<number>();
+    let knownWrongProgs = new Set<number>();
     let chunks = new Map<number, FloorOverlayChunk>();
     let stopped = false;
 
@@ -369,11 +375,13 @@ export function floorTracker(settings: OverlaySettings) {
     }, renders => {
         if (stopped) { return; }
         for (let render of renders) {
-            if (!knownProgs.has(render.program)) {
+            const pid = render.program.programId;
+            if (knownWrongProgs.has(pid)) continue;
+            if (!knownFloorProgs.has(pid)) {
                 if (render.program.inputs.find(q => q.name == "aMaterialSettingsSlotXY3")) {
-                    knownProgs.set(render.program, {});
+                    knownFloorProgs.add(pid);
                 } else {
-                    render.program.skipmask |= wrongprogmask;
+                    knownWrongProgs.add(pid);
                     continue;
                 }
             }

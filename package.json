@@ -14,6 +14,7 @@
 		"@tippyjs/react": "^4.2.6",
 		"alt1": "0.1.2",
 		"alt1-launcher-api": "^2.0.3",
+		"freetype-wasm": "^0.0.4",
 		"gl-matrix": "^3.4.4",
 		"idb-keyval": "^6.2.2",
 		"immer": "^11.1.4",

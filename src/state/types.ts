@@ -203,7 +203,6 @@ export type QuestStep = {
 	additionalStepInformation?: string[];
 	dialogOptions?: string[];
 	highlights: QuestHighlights;
-	floor: number;
 	stepId?: number;
 	completionConditions?: StepCompletionConditions | null;
 };
@@ -238,7 +237,6 @@ export type NormalizedQuestStep = {
 	additionalStepInformation: string[];
 	dialogOptions: string[];
 	highlights: QuestHighlights;
-	floor: number;
 	completionConditions?: StepCompletionConditions | null;
 };
 
@@ -267,7 +265,6 @@ type StepIn = {
 	additionalStepInformation?: unknown;
 	dialogOptions?: unknown;
 	highlights?: QuestHighlights;
-	floor?: number;
 	stepId?: number;
 	completionConditions?: unknown;
 };
@@ -314,7 +311,6 @@ export function bundleToQuest(b: QuestBundle): Quest {
 			additionalStepInformation: toLinesArray(s.additionalStepInformation),
 			dialogOptions: toLinesArray(s.dialogOptions),
 			highlights: s.highlights ?? { npc: [], object: [] },
-			floor: Number.isFinite(s.floor as number) ? (s.floor as number) : 0,
 			stepId: typeof s.stepId === "number" ? s.stepId : undefined,
 			completionConditions: (s as any).completionConditions ?? null,
 		})),
@@ -352,7 +348,6 @@ export function questToBundle(q: Quest): QuestBundleNormalized {
 			additionalStepInformation: toLinesArray(s.additionalStepInformation),
 			dialogOptions: toLinesArray(s.dialogOptions),
 			highlights: s.highlights ?? { npc: [], object: [] },
-			floor: Number.isFinite(s.floor) ? s.floor : 0,
 		})),
 		images: q.questImages ?? [],
 	};

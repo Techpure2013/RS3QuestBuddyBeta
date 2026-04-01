@@ -1,4 +1,5 @@
 import React from "react";
+import { useSettings } from "../Entrance/Entrance Components/SettingsContext";
 
 /**
  * RichText Parser - Discord/Reddit-style text formatting
@@ -17,9 +18,25 @@ import React from "react";
  * - ![alt|32](url)       → Image with custom size
  * - {{img:url}}          → Image shorthand (48px)
  * - {{img:url|64}}       → Image shorthand with size
+ * - step(22){text}       → Step link (jump to step 22)
+ * - {{table|...}}        → Table with customizable styling
  *
  * Combinations work: __**bold underline**__ or __*italic underline*__
  */
+
+interface TableStyle {
+	borderColor: string;
+	headerBgColor: string;
+	headerTextColor: string;
+	evenRowBgColor: string;
+	oddRowBgColor: string;
+}
+
+interface TableData {
+	headers: string[];
+	rows: string[][];
+	style: TableStyle;
+}
 
 type TextNode =
 	| { type: "text"; content: string }
@@ -30,7 +47,9 @@ type TextNode =
 	| { type: "superscript"; children: TextNode[] }
 	| { type: "color"; color: string; children: TextNode[] }
 	| { type: "link"; url: string; children: TextNode[] }
-	| { type: "image"; url: string; alt: string; size?: number };
+	| { type: "image"; url: string; alt: string; size?: number }
+	| { type: "steplink"; step: number; children: TextNode[] }
+	| { type: "table"; table: TableData };
 
 // Token patterns in order of precedence (most specific first)
 const patterns: Array<{
@@ -40,10 +59,16 @@ const patterns: Array<{
 	getUrl?: (match: RegExpMatchArray) => string;
 	getAlt?: (match: RegExpMatchArray) => string;
 	getSize?: (match: RegExpMatchArray) => number | undefined;
+	getStep?: (match: RegExpMatchArray) => number;
 }> = [
+	// Table: {{table|border:#hex|hbg:#hex|htx:#hex|ebg:#hex|obg:#hex|h1|h2||r1c1|r1c2||r2c1|r2c2}}
+	{
+		regex: /\{\{table\|([^}]+)\}\}/,
+		type: "table" as const,
+	},
 	// Image with size: ![alt|size](url) - e.g., ![NPC|32](https://...)
 	{
-		regex: /!\[([^\]|]*)\|(\d+)\]\((https?:\/\/[^)]+)\)/,
+		regex: /!\[([^\]|]*)\|(\d+)\]\((https?:\/\/(?:[^()\s]|\([^()]*\))+)\)/,
 		type: "image",
 		getAlt: (m) => m[1],
 		getUrl: (m) => m[3],
@@ -51,7 +76,7 @@ const patterns: Array<{
 	},
 	// Image standard: ![alt](url) - defaults to 48px (chathead size)
 	{
-		regex: /!\[([^\]]*)\]\((https?:\/\/[^)]+)\)/,
+		regex: /!\[([^\]]*)\]\((https?:\/\/(?:[^()\s]|\([^()]*\))+)\)/,
 		type: "image",
 		getAlt: (m) => m[1],
 		getUrl: (m) => m[2],
@@ -78,7 +103,7 @@ const patterns: Array<{
 	},
 	// Link: [text](url) - HTTPS only for security
 	{
-		regex: /\[([^\]]+)\]\((https:\/\/[^)]+)\)/,
+		regex: /\[([^\]]+)\]\((https:\/\/(?:[^()\s]|\([^()]*\))+)\)/,
 		type: "link",
 		getUrl: (m) => m[2],
 	},
@@ -97,6 +122,12 @@ const patterns: Array<{
 	{ regex: /\^\(([^)]+)\)/, type: "superscript" },
 	// Superscript single word: ^word
 	{ regex: /\^(\S+)/, type: "superscript" },
+	// Step link: step(22){text} - jump to specific step
+	{
+		regex: /step\((\d+)\)\{(.+?)\}(?!\})/,
+		type: "steplink",
+		getStep: (m) => parseInt(m[1], 10),
+	},
 ];
 
 function parseRichText(text: string): TextNode[] {
@@ -113,6 +144,8 @@ function parseRichText(text: string): TextNode[] {
 			url?: string;
 			alt?: string;
 			size?: number;
+			step?: number;
+			table?: TableData;
 		} | null = null;
 
 		// Find the earliest matching pattern
@@ -122,12 +155,56 @@ function parseRichText(text: string): TextNode[] {
 				if (earliestMatch === null || match.index < earliestMatch.index) {
 					// For color patterns, content is in different capture groups
 					let content: string;
-					if (pattern.type === "color" && pattern.getColor) {
+					let tableData: TableData | undefined;
+
+					if (pattern.type === "table") {
+						// Parse table: border:#hex|hbg:#hex|htx:#hex|ebg:#hex|obg:#hex|h1|h2||r1c1|r1c2||r2c1|r2c2
+						content = "";
+						const parts = match[1].split("|");
+						const style: TableStyle = {
+							borderColor: "#5a4a3a",
+							headerBgColor: "#2a2318",
+							headerTextColor: "#c4a87a",
+							evenRowBgColor: "#1e1a14",
+							oddRowBgColor: "#2a2318",
+						};
+
+						const dataParts: string[] = [];
+						for (const part of parts) {
+							if (part.startsWith("border:")) {
+								style.borderColor = part.substring(7);
+							} else if (part.startsWith("hbg:")) {
+								style.headerBgColor = part.substring(4);
+							} else if (part.startsWith("htx:")) {
+								style.headerTextColor = part.substring(4);
+							} else if (part.startsWith("ebg:")) {
+								style.evenRowBgColor = part.substring(4);
+							} else if (part.startsWith("obg:")) {
+								style.oddRowBgColor = part.substring(4);
+							} else {
+								dataParts.push(part);
+							}
+						}
+
+						// Split by || to get headers and rows
+						// Trim cells so space-padded empty cells (from serializer) become ""
+						const dataString = dataParts.join("|");
+						const segments = dataString.split("||");
+						const headers = segments[0] ? segments[0].split("|").map(h => h.trim()) : [];
+						const rows = segments.slice(1)
+							.filter(seg => seg.trim())
+							.map(seg => seg.split("|").map(c => c.trim()));
+
+						tableData = { headers, rows, style };
+					} else if (pattern.type === "color" && pattern.getColor) {
 						// RGB pattern has content in group 4, hex in group 2
 						content = match[4] ?? match[2];
 					} else if (pattern.type === "image") {
 						// Images don't have inner content to parse
 						content = "";
+					} else if (pattern.type === "steplink") {
+						// steplink has content in group 2
+						content = match[2];
 					} else {
 						content = match[1];
 					}
@@ -141,6 +218,8 @@ function parseRichText(text: string): TextNode[] {
 						url: pattern.getUrl?.(match),
 						alt: pattern.getAlt?.(match),
 						size: pattern.getSize?.(match),
+						step: pattern.getStep?.(match),
+						table: tableData,
 					};
 				}
 			}
@@ -162,13 +241,18 @@ function parseRichText(text: string): TextNode[] {
 			});
 		}
 
-		// Handle image type specially (no children)
+		// Handle image and table types specially (no children)
 		if (earliestMatch.type === "image" && earliestMatch.url) {
 			nodes.push({
 				type: "image",
 				url: earliestMatch.url,
 				alt: earliestMatch.alt || "",
 				size: earliestMatch.size,
+			});
+		} else if (earliestMatch.type === "table" && earliestMatch.table) {
+			nodes.push({
+				type: "table",
+				table: earliestMatch.table,
 			});
 		} else {
 			// Recursively parse the content inside the matched pattern
@@ -184,6 +268,12 @@ function parseRichText(text: string): TextNode[] {
 				nodes.push({
 					type: "link",
 					url: earliestMatch.url,
+					children: innerNodes,
+				});
+			} else if (earliestMatch.type === "steplink" && earliestMatch.step !== undefined) {
+				nodes.push({
+					type: "steplink",
+					step: earliestMatch.step,
 					children: innerNodes,
 				});
 			} else {
@@ -203,6 +293,9 @@ function parseRichText(text: string): TextNode[] {
 
 interface RenderOptions {
 	inheritColor?: string;
+	onStepClick?: (step: number) => void;
+	onTableClick?: (table: TableData) => void;
+	buttonColor?: string;
 }
 
 function renderNodes(
@@ -320,6 +413,32 @@ function renderNodes(
 					</span>
 				);
 
+			case "steplink":
+				return (
+					<a
+						key={key}
+						href="#"
+						onClick={(e) => {
+							e.preventDefault();
+							e.stopPropagation();
+							options.onStepClick?.(node.step);
+						}}
+						style={{
+							color: options.inheritColor || "#22c55e",
+							textDecoration: "underline",
+							cursor: "pointer",
+						}}
+						title={`Go to step ${node.step}`}
+					>
+						{renderNodes(node.children, key, options)}
+					</a>
+				);
+
+			case "table":
+				// Tables are shown as ActionIcons in QuestStepDisplay
+				// Return empty fragment - the table icon on the right handles it
+				return <React.Fragment key={key} />;
+
 			default:
 				return null;
 		}
@@ -330,6 +449,12 @@ export interface RichTextProps {
 	children: string;
 	/** Fallback for plain text if parsing fails */
 	fallbackToPlain?: boolean;
+	/** Callback when a step link is clicked */
+	onStepClick?: (step: number) => void;
+	/** Callback when a table is clicked */
+	onTableClick?: (table: TableData) => void;
+	/** Custom button color for table buttons (from theme settings) */
+	buttonColor?: string;
 }
 
 /**
@@ -345,14 +470,23 @@ export interface RichTextProps {
 export const RichText: React.FC<RichTextProps> = ({
 	children,
 	fallbackToPlain = true,
+	onStepClick,
+	onTableClick,
+	buttonColor,
 }) => {
+	const { settings } = useSettings();
+
 	if (typeof children !== "string") {
 		return <>{children}</>;
 	}
 
+	if (!settings.richTextEnabled) {
+		return <>{stripFormatting(children)}</>;
+	}
+
 	try {
 		const nodes = parseRichText(children);
-		return <>{renderNodes(nodes, "rt")}</>;
+		return <>{renderNodes(nodes, "rt", { onStepClick, onTableClick, buttonColor })}</>;
 	} catch (error) {
 		console.error("RichText parsing error:", error);
 		if (fallbackToPlain) {
@@ -366,10 +500,13 @@ export const RichText: React.FC<RichTextProps> = ({
  * Parse rich text and return React nodes directly
  * Useful when you need more control over rendering
  */
-export function parseAndRender(text: string): React.ReactNode {
+export function parseAndRender(
+	text: string,
+	options?: { onStepClick?: (step: number) => void; onTableClick?: (table: TableData) => void }
+): React.ReactNode {
 	try {
 		const nodes = parseRichText(text);
-		return <>{renderNodes(nodes, "rt")}</>;
+		return <>{renderNodes(nodes, "rt", options)}</>;
 	} catch {
 		return text;
 	}
@@ -394,11 +531,14 @@ export function stripFormatting(text: string): string {
 	while (result !== previousResult) {
 		previousResult = result;
 
+		// Table: {{table|...}} -> [Table]
+		result = result.replace(/\{\{table\|[^}]+\}\}/g, "[Table]");
+
 		// Image with size: ![alt|size](url) -> alt (or empty)
-		result = result.replace(/!\[([^\]|]*)\|\d+\]\((https?:\/\/[^)]+)\)/g, "$1");
+		result = result.replace(/!\[([^\]|]*)\|\d+\]\((https?:\/\/(?:[^()\s]|\([^()]*\))+)\)/g, "$1");
 
 		// Image standard: ![alt](url) -> alt (or empty)
-		result = result.replace(/!\[([^\]]*)\]\((https?:\/\/[^)]+)\)/g, "$1");
+		result = result.replace(/!\[([^\]]*)\]\((https?:\/\/(?:[^()\s]|\([^()]*\))+)\)/g, "$1");
 
 		// Image shorthand: {{img:url}} or {{img:url|size}} -> empty
 		result = result.replace(/\{\{img:(https?:\/\/[^|}]+)(?:\|\d+)?\}\}/g, "");
@@ -413,7 +553,7 @@ export function stripFormatting(text: string): string {
 		);
 
 		// Link: [text](url) -> text
-		result = result.replace(/\[([^\]]+)\]\((https:\/\/[^)]+)\)/g, "$1");
+		result = result.replace(/\[([^\]]+)\]\((https:\/\/(?:[^()\s]|\([^()]*\))+)\)/g, "$1");
 
 		// Bold italic: ***text*** -> text
 		result = result.replace(/\*\*\*(.+?)\*\*\*/g, "$1");
@@ -432,6 +572,9 @@ export function stripFormatting(text: string): string {
 
 		// Superscript single word: ^word -> word
 		result = result.replace(/\^(\S+)/g, "$1");
+
+		// Step link: step(N){text} -> text
+		result = result.replace(/step\(\d+\)\{(.+?)\}(?!\})/g, "$1");
 	}
 
 	return result;

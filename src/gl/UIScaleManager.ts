@@ -86,7 +86,7 @@ async function detectViewportFromRenders(): Promise<{ width: number; height: num
     return null;
   } finally {
     for (const r of renders) {
-      try { r.dispose?.(); } catch (_) {}
+      try { r.dispose?.()?.catch?.(() => {}); } catch (_) {}
     }
   }
 }
@@ -134,7 +134,7 @@ async function detectDPIScaling(): Promise<{
     return null;
   } finally {
     for (const r of renders) {
-      try { r.dispose?.(); } catch (_) {}
+      try { r.dispose?.()?.catch?.(() => {}); } catch (_) {}
     }
   }
 }
@@ -294,7 +294,7 @@ function startScaleMonitoring(): void {
             }
           } finally {
             for (const r of confirmRenders) {
-              try { r.dispose?.(); } catch (_) {}
+              try { r.dispose?.()?.catch?.(() => {}); } catch (_) {}
             }
           }
         }
@@ -308,7 +308,7 @@ function startScaleMonitoring(): void {
         await new Promise(resolve => setTimeout(resolve, 5000));
       } finally {
         for (const r of renders) {
-          try { r.dispose?.(); } catch (_) {}
+          try { r.dispose?.()?.catch?.(() => {}); } catch (_) {}
         }
       }
     }

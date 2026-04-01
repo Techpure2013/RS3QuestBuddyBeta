@@ -28,6 +28,7 @@ export interface SettingsState {
 	// UI Settings
 	toolTipsEnabled: boolean;
 	autoScrollEnabled: boolean;
+	richTextEnabled: boolean;
 	backgroundTheme: BackgroundTheme;
 	textColor: string;
 	labelColor: string;
@@ -63,6 +64,7 @@ const defaultSettings: SettingsState = {
 	autoAdvanceEnabled: false,
 	// UI Settings
 	toolTipsEnabled: true,
+	richTextEnabled: true,
 	backgroundTheme: "default",
 	textColor: "",
 	labelColor: "",

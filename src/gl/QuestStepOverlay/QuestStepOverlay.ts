@@ -876,8 +876,18 @@ export class QuestStepOverlay {
       } catch (e) {
         console.error("[QuestStepOverlay] Error stopping overlay:", e);
       }
+      try { this.overlayHandle.dispose?.(); } catch (_) {}
       this.overlayHandle = null;
     }
+    // Dispose GL resource handles to release native shared memory.
+    // Without this, TrackedTexture/GlProgram/VertexArraySnapshot handles
+    // accumulate in the HandleStore and pin C++ objects in shared memory.
+    try { this.texture?.dispose?.(); } catch (_) {}
+    try { this.program?.dispose?.(); } catch (_) {}
+    try { this.vertexArray?.dispose?.(); } catch (_) {}
+    this.texture = null;
+    this.program = null;
+    this.vertexArray = null;
   }
 
   /**

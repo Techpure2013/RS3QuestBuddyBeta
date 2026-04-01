@@ -1,9 +1,33 @@
 /**
  * TextRenderer - Renders text to a Canvas2D for use as a GL texture
  *
- * Creates a canvas with wrapped text, semi-transparent background,
- * and returns ImageData for texture creation.
+ * Uses FreeType WASM for crisp, hinted glyph rendering when available.
+ * Falls back to Canvas2D fillText() if FreeType is not initialized.
  */
+
+import { FreeTypeRenderer } from "./FreeTypeRenderer";
+
+// Module-level FreeType instance
+const ft = FreeTypeRenderer.getInstance();
+let ftInitPromise: Promise<void> | null = null;
+
+/**
+ * Initialize FreeType WASM for crisp text rendering.
+ * Call once at app startup. Falls back to Canvas2D if init fails.
+ * @param fontUrl  URL to font file (default: ./assets/fonts/RS3Font.woff2)
+ * @param wasmUrl  URL to freetype.wasm (default: ./assets/freetype.wasm)
+ */
+export async function initTextRenderer(fontUrl?: string, wasmUrl?: string): Promise<void> {
+  if (ftInitPromise) return ftInitPromise;
+  ftInitPromise = ft.init(
+    fontUrl || "./assets/fonts/RS3Font.woff2",
+    wasmUrl || "./assets/freetype.wasm"
+  ).catch((e) => {
+    console.warn("[TextRenderer] FreeType init failed, using Canvas2D fallback:", e);
+    ftInitPromise = null;
+  });
+  return ftInitPromise;
+}
 
 export interface TextRenderConfig {
   /** Maximum width in pixels */
@@ -55,6 +79,43 @@ interface TextSegment {
 
 /** A line of text segments for rendering */
 type TextLine = TextSegment[];
+
+// ── FreeType-aware text helpers ──────────────────────────────────────
+
+/** Measure text width: FreeType when ready, Canvas2D fallback */
+function measureWidth(ctx: CanvasRenderingContext2D, text: string, fontSize: number): number {
+  return ft.isReady ? ft.measureText(text, fontSize) : ctx.measureText(text).width;
+}
+
+/** Draw text: FreeType when ready, Canvas2D fallback */
+function drawText(
+  ctx: CanvasRenderingContext2D,
+  text: string, x: number, y: number,
+  fontSize: number, color: string
+): void {
+  if (ft.isReady) {
+    ft.drawText(ctx, text, x, y, fontSize, color);
+  } else {
+    ctx.fillStyle = color;
+    ctx.fillText(text, x, y);
+  }
+}
+
+/** Draw bold text: FreeType synthetic bold when ready, Canvas2D fallback */
+function drawBoldText(
+  ctx: CanvasRenderingContext2D,
+  text: string, x: number, y: number,
+  fontSize: number, color: string
+): void {
+  if (ft.isReady) {
+    ft.drawTextBold(ctx, text, x, y, fontSize, color);
+  } else {
+    ctx.fillStyle = color;
+    ctx.fillText(text, x, y);
+  }
+}
+
+// ── Formatting helpers ───────────────────────────────────────────────
 
 /**
  * Strip formatting markers that Canvas2D can't render, preserving color codes
@@ -175,7 +236,8 @@ function parseColorCodes(text: string): TextSegment[] {
 function wrapTextWithColors(
   ctx: CanvasRenderingContext2D,
   text: string,
-  maxWidth: number
+  maxWidth: number,
+  fontSize: number
 ): TextLine[] {
   const segments = parseColorCodes(text);
   const lines: TextLine[] = [];
@@ -189,7 +251,7 @@ function wrapTextWithColors(
     for (const word of words) {
       if (!word) continue;
 
-      const wordWidth = ctx.measureText(word).width;
+      const wordWidth = measureWidth(ctx, word, fontSize);
 
       // Check if word fits on current line
       if (currentLineWidth + wordWidth > maxWidth && currentLine.length > 0) {
@@ -230,13 +292,14 @@ function renderTextLine(
   line: TextLine,
   x: number,
   y: number,
-  defaultColor: string
+  defaultColor: string,
+  fontSize: number
 ): void {
   let currentX = x;
   for (const segment of line) {
-    ctx.fillStyle = segment.color || defaultColor;
-    ctx.fillText(segment.text, currentX, y);
-    currentX += ctx.measureText(segment.text).width;
+    const color = segment.color || defaultColor;
+    drawText(ctx, segment.text, currentX, y, fontSize, color);
+    currentX += measureWidth(ctx, segment.text, fontSize);
   }
 }
 
@@ -269,7 +332,7 @@ export function renderQuestStep(
 
   // Wrap description text with color code support
   measureCtx.font = `${cfg.fontSize}px ${cfg.fontFamily}`;
-  const descriptionLines = wrapTextWithColors(measureCtx, stepDescription, contentMaxWidth);
+  const descriptionLines = wrapTextWithColors(measureCtx, stepDescription, contentMaxWidth, cfg.fontSize);
 
   // Calculate additional info lines if present
   let additionalLines: TextLine[] = [];
@@ -277,7 +340,7 @@ export function renderQuestStep(
   if (filteredInfo.length > 0) {
     measureCtx.font = `${cfg.fontSize - 1}px ${cfg.fontFamily}`;
     for (const info of filteredInfo) {
-      const infoLines = wrapTextWithColors(measureCtx, `• ${info}`, contentMaxWidth);
+      const infoLines = wrapTextWithColors(measureCtx, `\u2022 ${info}`, contentMaxWidth, cfg.fontSize - 1);
       additionalLines.push(...infoLines);
     }
   }
@@ -292,10 +355,10 @@ export function renderQuestStep(
   let dialogLines: DialogLine[] = [];
   if (dialogOptions && dialogOptions.length > 0) {
     measureCtx.font = `italic ${cfg.fontSize - 2}px ${cfg.fontFamily}`;
-    dialogLines.push({ text: "— Dialog Options —", isCompleted: false, isHeader: true });
+    dialogLines.push({ text: "\u2014 Dialog Options \u2014", isCompleted: false, isHeader: true });
     for (let i = 0; i < dialogOptions.length; i++) {
       const isCompleted = i < completedDialogCount;
-      const prefix = isCompleted ? "  ✓ " : "  ";
+      const prefix = isCompleted ? "  \u2713 " : "  ";
       dialogLines.push({ text: `${prefix}${dialogOptions[i]}`, isCompleted, isHeader: false });
     }
   }
@@ -306,7 +369,7 @@ export function renderQuestStep(
   if (filteredRequired.length > 0) {
     measureCtx.font = `${cfg.fontSize - 1}px ${cfg.fontFamily}`;
     for (const item of filteredRequired) {
-      const itemLines = wrapTextWithColors(measureCtx, `• ${item}`, contentMaxWidth);
+      const itemLines = wrapTextWithColors(measureCtx, `\u2022 ${item}`, contentMaxWidth, cfg.fontSize - 1);
       requiredItemLines.push(...itemLines);
     }
   }
@@ -317,7 +380,7 @@ export function renderQuestStep(
   if (filteredRecommended.length > 0) {
     measureCtx.font = `${cfg.fontSize - 1}px ${cfg.fontFamily}`;
     for (const item of filteredRecommended) {
-      const itemLines = wrapTextWithColors(measureCtx, `• ${item}`, contentMaxWidth);
+      const itemLines = wrapTextWithColors(measureCtx, `\u2022 ${item}`, contentMaxWidth, cfg.fontSize - 1);
       recommendedItemLines.push(...itemLines);
     }
   }
@@ -357,10 +420,9 @@ export function renderQuestStep(
   // Clear canvas to transparent (GL shader handles background/border via SDF)
   ctx.clearRect(0, 0, logicalWidth, logicalHeight);
 
-  // Draw header
-  ctx.fillStyle = "#88ccff";
+  // Draw header (bold)
   ctx.font = `bold ${cfg.fontSize}px ${cfg.fontFamily}`;
-  ctx.fillText(headerText, cfg.padding, cfg.padding + cfg.fontSize);
+  drawBoldText(ctx, headerText, cfg.padding, cfg.padding + cfg.fontSize, cfg.fontSize, "#88ccff");
 
   // Draw separator line (subtle, doesn't compete with border)
   const sepY = cfg.padding + headerHeight;
@@ -375,7 +437,7 @@ export function renderQuestStep(
   ctx.font = `${cfg.fontSize}px ${cfg.fontFamily}`;
   let y = sepY + lineHeight;
   for (const line of descriptionLines) {
-    renderTextLine(ctx, line, cfg.padding, y, cfg.textColor);
+    renderTextLine(ctx, line, cfg.padding, y, cfg.textColor, cfg.fontSize);
     y += lineHeight;
   }
 
@@ -395,7 +457,7 @@ export function renderQuestStep(
 
     ctx.font = `${cfg.fontSize - 1}px ${cfg.fontFamily}`;
     for (const line of additionalLines) {
-      renderTextLine(ctx, line, cfg.padding, y, "#ffcc77"); // Orange/gold color for additional info
+      renderTextLine(ctx, line, cfg.padding, y, "#ffcc77", cfg.fontSize - 1);
       y += lineHeight;
     }
   }
@@ -414,16 +476,15 @@ export function renderQuestStep(
 
     y += lineHeight * 0.5;
 
-    // Draw section header
-    ctx.fillStyle = "#ff9999";
+    // Draw section header (bold)
     ctx.font = `bold ${cfg.fontSize - 1}px ${cfg.fontFamily}`;
-    ctx.fillText("— Required Items —", cfg.padding, y);
+    drawBoldText(ctx, "\u2014 Required Items \u2014", cfg.padding, y, cfg.fontSize - 1, "#ff9999");
     y += lineHeight;
 
     // Draw items
     ctx.font = `${cfg.fontSize - 1}px ${cfg.fontFamily}`;
     for (const line of requiredItemLines) {
-      renderTextLine(ctx, line, cfg.padding, y, "#ffaaaa"); // Light red for required items
+      renderTextLine(ctx, line, cfg.padding, y, "#ffaaaa", cfg.fontSize - 1);
       y += lineHeight;
     }
   }
@@ -442,36 +503,34 @@ export function renderQuestStep(
 
     y += lineHeight * 0.5;
 
-    // Draw section header
-    ctx.fillStyle = "#99dd99";
+    // Draw section header (bold)
     ctx.font = `bold ${cfg.fontSize - 1}px ${cfg.fontFamily}`;
-    ctx.fillText("— Recommended Items —", cfg.padding, y);
+    drawBoldText(ctx, "\u2014 Recommended Items \u2014", cfg.padding, y, cfg.fontSize - 1, "#99dd99");
     y += lineHeight;
 
     // Draw items
     ctx.font = `${cfg.fontSize - 1}px ${cfg.fontFamily}`;
     for (const line of recommendedItemLines) {
-      renderTextLine(ctx, line, cfg.padding, y, "#aaddaa"); // Light green for recommended items
+      renderTextLine(ctx, line, cfg.padding, y, "#aaddaa", cfg.fontSize - 1);
       y += lineHeight;
     }
   }
 
   // Draw dialog options
   if (dialogLines.length > 0) {
-    ctx.font = `italic ${cfg.fontSize - 2}px ${cfg.fontFamily}`;
+    const dialogFontSize = cfg.fontSize - 2;
+    ctx.font = `italic ${dialogFontSize}px ${cfg.fontFamily}`;
     y += lineHeight * 0.5; // Small gap before dialog section
     for (const line of dialogLines) {
+      let color: string;
       if (line.isHeader) {
-        // Header line - light blue
-        ctx.fillStyle = "#aaddff";
+        color = "#aaddff";
       } else if (line.isCompleted) {
-        // Completed dialog - green
-        ctx.fillStyle = "#66dd88";
+        color = "#66dd88";
       } else {
-        // Pending dialog - light blue
-        ctx.fillStyle = "#aaddff";
+        color = "#aaddff";
       }
-      ctx.fillText(line.text, cfg.padding, y);
+      drawText(ctx, line.text, cfg.padding, y, dialogFontSize, color);
       y += lineHeight;
     }
   }
@@ -513,11 +572,19 @@ export function renderSimpleMessage(
   // Clear canvas to transparent (GL shader handles background/border)
   ctx.clearRect(0, 0, logicalWidth, logicalHeight);
 
-  // Text only
-  ctx.fillStyle = cfg.textColor;
-  ctx.font = `${cfg.fontSize}px ${cfg.fontFamily}`;
-  ctx.textAlign = "center";
-  ctx.fillText(message, logicalWidth / 2, logicalHeight / 2 + cfg.fontSize / 3);
+  // Centered text
+  const centerY = logicalHeight / 2 + cfg.fontSize / 3;
+  if (ft.isReady) {
+    // Manual centering with FreeType measurement
+    const textWidth = ft.measureText(message, cfg.fontSize);
+    const centerX = (logicalWidth - textWidth) / 2;
+    ft.drawText(ctx, message, centerX, centerY, cfg.fontSize, cfg.textColor);
+  } else {
+    ctx.fillStyle = cfg.textColor;
+    ctx.font = `${cfg.fontSize}px ${cfg.fontFamily}`;
+    ctx.textAlign = "center";
+    ctx.fillText(message, logicalWidth / 2, centerY);
+  }
 
   const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
 

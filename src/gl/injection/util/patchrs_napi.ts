@@ -201,7 +201,12 @@ export type RenderFilter = {
 	// also match glDispatchCompute calls (these don't have a vertex array and don't render to a framebuffer), default false
 	includeCompute?: boolean,
 	// include normal glDraw* calls, default true
-	includeDraw?: boolean
+	includeDraw?: boolean,
+	// IPC-only: filter renders server-side by program input name before serialization
+	// Dramatically reduces IPC payload for callers that only need specific program types
+	hasInput?: string,
+	// IPC-only: skip handle registration for returned objects (data-only)
+	skipHandles?: boolean
 }
 
 export type RendererInfo = {

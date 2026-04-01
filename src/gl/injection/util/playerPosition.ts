@@ -12,6 +12,8 @@
 
 import * as patchrs from "./patchrs_napi";
 import { getProgramMeta, getUniformValue } from "../render/renderprogram";
+// SharedRenderStream removed — continuous streaming exhausts the 512MB shared memory heap.
+// PassivePlayerTracker now polls with one-shot recordRenderCalls instead.
 
 const TILESIZE = 512;
 
@@ -336,37 +338,52 @@ export async function getCameraInfo(): Promise<CameraInfo | null> {
 export class PassivePlayerTracker {
   private debug: boolean;
   private initialized = false;
-  private stream: patchrs.StreamRenderObject | null = null;
+  private pollTimer: ReturnType<typeof setInterval> | null = null;
+  private pollInFlight = false;
   private currentPosition: PlayerPosition | null = null;
   private lastUpdateTime = 0;
 
   constructor(options: { debug?: boolean } = {}) {
-    this.debug = options.debug ?? true; // Enable debug by default for now
+    this.debug = options.debug ?? false;
   }
 
   /**
-   * Initialize streaming position tracking
+   * Initialize polling-based position tracking.
+   * Uses one-shot recordRenderCalls every 3s instead of streaming,
+   * which avoids exhausting the 512MB shared memory heap.
    */
   async init(): Promise<boolean> {
-    if (this.initialized && this.stream) return true;
+    if (this.initialized) return true;
 
-    try{
-      // Start streaming render calls
-      // Need vertexarray + uniforms to match what the active tracker uses
-      // This allows getProgramMeta to work and find the player mesh
-      this.stream = patchrs.native.streamRenderCalls(
-        {
-          features: ["uniforms"],
-          framecooldown: 600, // Match PlayerPositionTracker polling interval
-        },
-        (renders) => this.processRenders(renders)
-      );
-
+    try {
+      this.pollTimer = setInterval(() => this.pollOnce(), 3000);
       this.initialized = true;
+      // Immediate first poll
+      this.pollOnce();
       return true;
     } catch (e) {
       console.error("[PassivePlayer] Init error:", e);
       return false;
+    }
+  }
+
+  private async pollOnce(): Promise<void> {
+    if (this.pollInFlight || !patchrs.native) return;
+    this.pollInFlight = true;
+    let renders: any[] = [];
+    try {
+      renders = await patchrs.native.recordRenderCalls({
+        maxframes: 1,
+        features: ["uniforms"],
+      });
+      this.processRenders(renders);
+    } catch (e) {
+      if (this.debug) console.error("[PassivePlayer] Poll error:", e);
+    } finally {
+      for (const r of renders) {
+        try { r.dispose?.(); } catch (_) {}
+      }
+      this.pollInFlight = false;
     }
   }
 
@@ -445,8 +462,8 @@ export class PassivePlayerTracker {
    * Get current player position (instant read from cached value)
    */
   getPosition(): PlayerPosition | null {
-    // Return cached position if recent (within 500ms)
-    if (this.currentPosition && Date.now() - this.lastUpdateTime < 500) {
+    // Return cached position if recent (within 5s — stream fires every ~2s)
+    if (this.currentPosition && Date.now() - this.lastUpdateTime < 5000) {
       return this.currentPosition;
     }
     return null;
@@ -471,13 +488,9 @@ export class PassivePlayerTracker {
    * Stop tracking
    */
   stop(): void {
-    if (this.stream) {
-      try {
-        this.stream.close();
-      } catch (e) {
-        // Ignore
-      }
-      this.stream = null;
+    if (this.pollTimer) {
+      clearInterval(this.pollTimer);
+      this.pollTimer = null;
     }
     this.currentPosition = null;
     this.initialized = false;

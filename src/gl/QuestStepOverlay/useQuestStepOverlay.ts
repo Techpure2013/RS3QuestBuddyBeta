@@ -10,6 +10,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { QuestStepOverlay, OverlayPosition } from "./QuestStepOverlay";
+import { initTextRenderer } from "./TextRenderer";
 
 export interface UseQuestStepOverlayOptions {
   /** Whether the overlay is enabled */
@@ -85,6 +86,9 @@ export function useQuestStepOverlay(
         if (!patchrs.native) {
           return;
         }
+
+        // Initialize FreeType WASM for crisp text (non-blocking, falls back to Canvas2D)
+        initTextRenderer().catch(() => {});
 
         overlayRef.current = new QuestStepOverlay();
         setIsAvailable(true);

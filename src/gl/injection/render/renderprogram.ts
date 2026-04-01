@@ -8,7 +8,9 @@ import { CrcBuilder } from "../util/crc32";
 const spriteShaderFragment = require("!raw-loader!./shaders/sprite_fragment.glsl").default;
 const spriteShaderVertex = require("!raw-loader!./shaders/sprite_vertex.glsl").default;
 
-var cachedPrograms = new WeakMap<patchrs.GlProgram, ProgramMeta>();
+// Map keyed by programId (not object reference) so the cache works across IPC
+// frames where each frame delivers new JS objects for the same native programs.
+var cachedPrograms = new Map<number, ProgramMeta>();
 var vertexPosAliases = ["aVertexPosition_BoneLabel", "aWaterPosition_Depth", "aVertexPosition2D", "aVertexPosition"];
 
 
@@ -19,11 +21,12 @@ export type RenderFunc = ReturnType<typeof getRenderFunc>;
 export type ProgramMeta = ReturnType<typeof fetchProgramMeta>;
 
 export function getProgramMeta(prog: patchrs.GlProgram) {
-	if (cachedPrograms.has(prog)) {
-		return cachedPrograms.get(prog)!;
+	const pid = prog.programId;
+	if (cachedPrograms.has(pid)) {
+		return cachedPrograms.get(pid)!;
 	}
 	var r = fetchProgramMeta(prog);
-	cachedPrograms.set(prog, r);
+	cachedPrograms.set(pid, r);
 	return r;
 }
 

@@ -9,6 +9,7 @@
  */
 
 import * as patchrs from "../util/patchrs_napi";
+import { captureWithStreamPause } from "../util/SharedRenderStream";
 import {
     CHUNK_SIZE,
     TILE_SIZE,
@@ -22,6 +23,7 @@ import {
     UniformSnapshotBuilder,
     positionMatrix
 } from "./index";
+import { FreeTypeRenderer } from "../../QuestStepOverlay/FreeTypeRenderer";
 
 // Fragment shader with flat normals (from tilemarkers.ts)
 const fragshader = `
@@ -63,141 +65,6 @@ const vertshader = `
 
 // ============================================================================
 // Barrier Vertex Shader - Vertical wave wall effect like RS3 barriers
-// Creates flowing energy wall effect with horizontal distortion based on height
-// aColor.a encodes the normalized height (0=bottom, 1=top)
-// ============================================================================
-const barrierVertShader = `
-    #version 330 core
-    layout (location = 0) in vec3 aPos;
-    layout (location = 6) in vec4 aColor;  // RGBA where A = height factor (0-1)
-    uniform highp mat4 uModelMatrix;
-    uniform highp mat4 uViewProjMatrix;
-    uniform highp float uTime;
-    out vec4 ourColor;
-    out vec3 FragPos;
-    out float vHeight;
-
-    void main() {
-        // Height is encoded in alpha channel (0=bottom, 1=top)
-        vHeight = aColor.a;
-
-        // Simple transform - no wave animation for now
-        vec4 worldpos = uModelMatrix * vec4(aPos, 1.0);
-
-        gl_Position = uViewProjMatrix * worldpos;
-        FragPos = worldpos.xyz / worldpos.w;
-        ourColor = aColor;
-    }`;
-
-// Barrier Fragment Shader - Volumetric flame effect inspired by Shadertoy MdX3zr
-// Uses FBM noise for realistic fire with color gradient
-const barrierFragShader = `
-    #version 330 core
-    in vec3 FragPos;
-    in vec4 ourColor;
-    in float vHeight;
-    uniform mat4 uSunlightViewMatrix;
-    uniform vec3 uSunColour;
-    uniform vec3 uAmbientColour;
-    uniform float uTime;
-    out vec4 FragColor;
-
-    // Hash function for noise
-    float hash(vec3 p) {
-        p = fract(p * 0.3183099 + 0.1);
-        p *= 17.0;
-        return fract(p.x * p.y * p.z * (p.x + p.y + p.z));
-    }
-
-    // 3D noise
-    float noise(vec3 p) {
-        vec3 i = floor(p);
-        vec3 f = fract(p);
-        f = f * f * (3.0 - 2.0 * f);
-
-        return mix(
-            mix(mix(hash(i + vec3(0,0,0)), hash(i + vec3(1,0,0)), f.x),
-                mix(hash(i + vec3(0,1,0)), hash(i + vec3(1,1,0)), f.x), f.y),
-            mix(mix(hash(i + vec3(0,0,1)), hash(i + vec3(1,0,1)), f.x),
-                mix(hash(i + vec3(0,1,1)), hash(i + vec3(1,1,1)), f.x), f.y),
-            f.z
-        );
-    }
-
-    // Fractal Brownian Motion - creates realistic fire turbulence
-    float fbm(vec3 p) {
-        float value = 0.0;
-        float amplitude = 0.5;
-        float frequency = 1.0;
-        for (int i = 0; i < 5; i++) {
-            value += amplitude * noise(p * frequency);
-            amplitude *= 0.5;
-            frequency *= 2.0;
-        }
-        return value;
-    }
-
-    void main() {
-        // World-space coordinates for consistent fire pattern
-        vec3 p = FragPos * 0.015;
-
-        // Rising fire motion - flames move upward over time
-        float t = uTime * 0.7;
-        p.y -= t * 0.8;  // Upward flow
-
-        // Multiple noise octaves for fire turbulence
-        float n = fbm(p * 3.0 + vec3(0, -t * 2.0, 0));
-        float n2 = fbm(p * 5.0 + vec3(100, -t * 3.0, 50));
-
-        // Fire shape - denser at bottom, sparse at top
-        float fireShape = n * 0.7 + n2 * 0.3;
-        fireShape = fireShape * (1.0 - vHeight * 0.6);  // Fade toward top
-
-        // Add some horizontal flicker
-        float flicker = sin(FragPos.x * 0.1 + t * 5.0) * 0.1;
-        fireShape += flicker * (1.0 - vHeight);
-
-        // Threshold for flame visibility - creates holes in the fire
-        // Lower threshold means more visible flame
-        float threshold = vHeight * 0.3 + 0.1;
-        if (fireShape < threshold) {
-            discard;
-        }
-
-        // Fire color gradient: yellow core -> orange -> red -> dark at edges
-        // Base color from vertex (allows customization via marker.color)
-        vec3 baseColor = ourColor.rgb;
-
-        // Fire intensity based on noise and height
-        float intensity = smoothstep(threshold, threshold + 0.3, fireShape);
-        intensity *= (1.0 - vHeight * 0.3);  // Dimmer at top
-
-        // Color temperature - hotter (brighter) at core, cooler at edges
-        vec3 hotColor = vec3(1.0, 0.9, 0.3);   // Yellow-white core
-        vec3 warmColor = vec3(1.0, 0.5, 0.0);  // Orange mid
-        vec3 coolColor = baseColor;             // User color (cyan default) at edge
-
-        // Blend colors based on intensity
-        vec3 fireColor;
-        if (intensity > 0.7) {
-            fireColor = mix(warmColor, hotColor, (intensity - 0.7) / 0.3);
-        } else if (intensity > 0.4) {
-            fireColor = mix(coolColor, warmColor, (intensity - 0.4) / 0.3);
-        } else {
-            fireColor = coolColor * (intensity / 0.4);
-        }
-
-        // Add glow effect
-        float glow = smoothstep(0.0, 0.5, intensity) * 0.3;
-        fireColor += vec3(glow * 0.5, glow * 0.3, glow * 0.1);
-
-        // Alpha based on intensity - more transparent at edges
-        float alpha = smoothstep(threshold, threshold + 0.2, fireShape);
-        alpha = min(alpha, 0.95);  // Never fully opaque
-
-        FragColor = vec4(fireColor, alpha);
-    }`;
-
 // ============================================================================
 // Water Path Vertex Shader - Animated waves for water surface effect
 // aColor.rgba encodes: RGB = base color, A = progress (0=start, 1=end)
@@ -335,48 +202,54 @@ const pathFragShaderTextured = `
 // Mask for filtering non-floor programs
 const wrongProgramMask = 1 << 5;
 
+// Deduplicate "chunk not found" warnings — only log once per chunk per session
+const _objectTileWarnedChunks = new Set<string>();
+
 // ============================================================================
 // Text Label Vertex Shader - Billboard effect (always faces camera)
 // Rotates text around Y axis to face the camera
 // ============================================================================
 
+// Billboard text vertex shader — positions a textured quad in world space, Y-axis billboard
 const textVertShader = `
     #version 330 core
-    layout (location = 0) in vec3 aPos;
-    layout (location = 6) in vec3 aColor;
+    layout (location = 0) in vec2 aPos;   // quad corner (-0.5 to 0.5)
+    layout (location = 1) in vec2 aUV;
     uniform highp mat4 uModelMatrix;
     uniform highp mat4 uViewProjMatrix;
-    uniform highp vec3 uTextCenter;  // Center of the text in local coords
-    out vec4 ourColor;
-    out vec3 FragPos;
+    uniform highp vec3 uTextCenter;   // center in local coords
+    uniform highp vec2 uTextSize;     // width, height in world units
+    out vec2 vUV;
 
     void main() {
-        // First transform everything to world space
         vec4 worldCenter = uModelMatrix * vec4(uTextCenter, 1.0);
-        vec4 worldPos = uModelMatrix * vec4(aPos, 1.0);
 
-        // Get offset from center in world space
-        vec3 offset = worldPos.xyz - worldCenter.xyz;
-
-        // Extract camera forward from ViewProj matrix (third column)
-        // This points from camera towards scene
-        vec3 camForward = normalize(vec3(uViewProjMatrix[0][2], uViewProjMatrix[1][2], uViewProjMatrix[2][2]));
-
-        // For Y-axis billboard, project forward onto XZ plane and compute right
+        // Y-axis billboard: derive camera right/up from ViewProj
+        vec3 camForward = normalize(vec3(
+            uViewProjMatrix[0][2], uViewProjMatrix[1][2], uViewProjMatrix[2][2]));
         vec3 camUp = vec3(0.0, 1.0, 0.0);
         vec3 flatForward = normalize(vec3(camForward.x, 0.0, camForward.z));
         vec3 camRight = cross(camUp, flatForward);
 
-        // Rotate the offset: local X becomes camera right, local Z becomes flat forward
-        // Y (height) stays unchanged
-        vec3 rotatedOffset = camRight * offset.x + camUp * offset.y + flatForward * offset.z;
+        // Scale quad to world size, billboard-rotate
+        vec3 offset = camRight * aPos.x * uTextSize.x
+                    + camUp    * aPos.y * uTextSize.y;
+        vec3 finalPos = worldCenter.xyz + offset;
 
-        // Final world position
-        vec3 finalWorldPos = worldCenter.xyz + rotatedOffset;
+        gl_Position = uViewProjMatrix * vec4(finalPos, 1.0);
+        vUV = aUV;
+    }`;
 
-        gl_Position = uViewProjMatrix * vec4(finalWorldPos, 1.0);
-        FragPos = finalWorldPos;
-        ourColor = vec4(aColor, 1.0);
+// Billboard text fragment shader — textured with alpha
+const textFragShader = `
+    #version 330 core
+    in vec2 vUV;
+    out vec4 FragColor;
+    uniform sampler2D uTexture;
+    void main() {
+        vec4 t = texture(uTexture, vUV);
+        if (t.a < 0.01) discard;
+        FragColor = t;
     }`;
 
 // ============================================================================
@@ -385,160 +258,80 @@ const textVertShader = `
 // Text is oriented to face SOUTH (readable when looking from south to north)
 // ============================================================================
 
-// Character definitions: array of segments where each segment is [x1, y1, x2, y2] (0-1 range)
-// x=0 is left, x=1 is right; y=0 is top, y=1 is bottom
-const CHAR_SEGMENTS: { [char: string]: number[][] } = {
-    // Digits (7-segment style)
-    '0': [[0,0,1,0], [0,0,0,1], [1,0,1,1], [0,1,1,1]],
-    '1': [[0.4,0,0.4,1]],
-    '2': [[0,0,1,0], [1,0,1,0.5], [0,0.5,1,0.5], [0,0.5,0,1], [0,1,1,1]],
-    '3': [[0,0,1,0], [1,0,1,1], [0,0.5,1,0.5], [0,1,1,1]],
-    '4': [[0,0,0,0.5], [1,0,1,1], [0,0.5,1,0.5]],
-    '5': [[0,0,1,0], [0,0,0,0.5], [0,0.5,1,0.5], [1,0.5,1,1], [0,1,1,1]],
-    '6': [[0,0,1,0], [0,0,0,1], [0,0.5,1,0.5], [1,0.5,1,1], [0,1,1,1]],
-    '7': [[0,0,1,0], [1,0,1,1]],
-    '8': [[0,0,1,0], [0,0,0,1], [1,0,1,1], [0,0.5,1,0.5], [0,1,1,1]],
-    '9': [[0,0,1,0], [0,0,0,0.5], [1,0,1,1], [0,0.5,1,0.5], [0,1,1,1]],
-    // Letters (block style - horizontal and vertical segments only)
-    'A': [[0,0,1,0], [0,0,0,1], [1,0,1,1], [0,0.5,1,0.5]],
-    'B': [[0,0,1,0], [0,0,0,1], [1,0,1,0.5], [0,0.5,1,0.5], [1,0.5,1,1], [0,1,1,1]],
-    'C': [[0,0,1,0], [0,0,0,1], [0,1,1,1]],
-    'D': [[0,0,0.8,0], [0,0,0,1], [0.8,0,0.8,1], [0,1,0.8,1]],
-    'E': [[0,0,1,0], [0,0,0,1], [0,0.5,0.7,0.5], [0,1,1,1]],
-    'F': [[0,0,1,0], [0,0,0,1], [0,0.5,0.7,0.5]],
-    'G': [[0,0,1,0], [0,0,0,1], [0,1,1,1], [1,0.5,1,1], [0.5,0.5,1,0.5]],
-    'H': [[0,0,0,1], [1,0,1,1], [0,0.5,1,0.5]],
-    'I': [[0,0,1,0], [0.5,0,0.5,1], [0,1,1,1]],
-    'J': [[0,0,1,0], [0.6,0,0.6,1], [0,0.8,0.6,1]],
-    'K': [[0,0,0,1], [0,0.5,1,0.5], [1,0,1,0.5], [1,0.5,1,1]],
-    'L': [[0,0,0,1], [0,1,1,1]],
-    'M': [[0,0,0,1], [0,0,0.5,0], [0.5,0,1,0], [1,0,1,1]],
-    'N': [[0,0,0,1], [0,0,1,0], [1,0,1,1]],
-    'O': [[0,0,1,0], [0,0,0,1], [1,0,1,1], [0,1,1,1]],
-    'P': [[0,0,1,0], [0,0,0,1], [1,0,1,0.5], [0,0.5,1,0.5]],
-    'Q': [[0,0,1,0], [0,0,0,1], [1,0,1,1], [0,1,1,1]],
-    'R': [[0,0,1,0], [0,0,0,1], [1,0,1,0.5], [0,0.5,1,0.5], [0.5,0.5,0.5,0.75], [0.75,0.75,0.75,1]],
-    'S': [[0,0,1,0], [0,0,0,0.5], [0,0.5,1,0.5], [1,0.5,1,1], [0,1,1,1]],
-    'T': [[0,0,1,0], [0.5,0,0.5,1]],
-    'U': [[0,0,0,1], [1,0,1,1], [0,1,1,1]],
-    'V': [[0,0,0,0.4], [0.2,0.4,0.2,0.7], [0.4,0.7,0.4,1], [1,0,1,0.4], [0.8,0.4,0.8,0.7], [0.6,0.7,0.6,1], [0.4,1,0.6,1]],
-    'W': [[0,0,0,1], [0.25,0.5,0.25,1], [0.5,0.5,0.5,1], [0.75,0.5,0.75,1], [1,0,1,1]],
-    'X': [[0,0,0,0.4], [0.3,0.4,0.3,0.6], [0.7,0.4,0.7,0.6], [0,0.6,0,1], [1,0,1,0.4], [1,0.6,1,1]],
-    'Y': [[0,0,0,0.5], [1,0,1,0.5], [0,0.5,1,0.5], [0.5,0.5,0.5,1]],
-    'Z': [[0,0,1,0], [1,0,1,0.5], [0,0.5,1,0.5], [0,0.5,0,1], [0,1,1,1]],
-    // Space - no segments (just advances position)
-    ' ': [],
-};
-
 /**
- * Generate 3D geometry for a text string
- * Creates UPRIGHT extruded block letters that stand vertically
- * Text is centered at (centerX, centerZ) and stands up from baseHeight
+ * Render a text label to a canvas (FreeType when available, Canvas2D fallback).
+ * Returns ImageData for texture creation and pixel dimensions.
  */
-function generateTextGeometry(
+function renderLabelToCanvas(
     text: string,
-    centerX: number,
-    centerZ: number,
-    baseHeight: number,
-    charSize: number,
     color: [number, number, number]
-): { pos: number[], colors: number[], indices: number[] } {
-    const pos: number[] = [];
-    const colors: number[] = [];
-    const indices: number[] = [];
+): { imageData: ImageData; width: number; height: number } {
+    const ft = FreeTypeRenderer.getInstance();
+    const fontSize = 28;
+    const padding = 8;
+    const borderRadius = 6;
+    const fontFamily = "'Segoe UI', Arial, sans-serif";
 
-    const charWidth = charSize * 0.6;    // Character width (along X)
-    const charHeight = charSize;          // Character height (along Y - up!)
-    const charSpacing = charSize * 0.2;   // Space between characters
-    const barThickness = charSize * 0.12; // Thickness of each bar
-    const extrudeDepth = charSize * 0.1;  // Depth of text (along Z)
-
-    // Calculate total width for centering
-    const totalWidth = text.length * charWidth + (text.length - 1) * charSpacing;
-
-    // Text runs along X axis, characters stand up along Y axis
-    let charStartX = centerX - totalWidth / 2;
-
-    let vertexOffset = 0;
-
-    for (const char of text.toUpperCase()) {
-        const segments = CHAR_SEGMENTS[char];
-        if (!segments) {
-            charStartX += charWidth + charSpacing;
-            continue;
-        }
-
-        for (const seg of segments) {
-            // Convert segment coordinates to world space
-            // seg X (0=left, 1=right) -> world X
-            // seg Y (0=top, 1=bottom) -> world Y (flipped: 0=top means high Y)
-            const worldX1 = charStartX + seg[0] * charWidth;
-            const worldX2 = charStartX + seg[2] * charWidth;
-            // Character Y maps to world Y (height) - flip so top of char is higher
-            const worldY1 = baseHeight + (1 - seg[1]) * charHeight;
-            const worldY2 = baseHeight + (1 - seg[3]) * charHeight;
-
-            const isHorizontal = Math.abs(seg[1] - seg[3]) < 0.1;
-            const isVertical = Math.abs(seg[0] - seg[2]) < 0.1;
-
-            let minX: number, maxX: number, minY: number, maxY: number;
-
-            if (isHorizontal) {
-                // Horizontal bar - extends along X
-                minX = Math.min(worldX1, worldX2);
-                maxX = Math.max(worldX1, worldX2);
-                minY = worldY1 - barThickness / 2;
-                maxY = worldY1 + barThickness / 2;
-            } else if (isVertical) {
-                // Vertical bar - extends along Y (up)
-                minX = worldX1 - barThickness / 2;
-                maxX = worldX1 + barThickness / 2;
-                minY = Math.min(worldY1, worldY2);
-                maxY = Math.max(worldY1, worldY2);
-            } else {
-                continue;
-            }
-
-            // Create box: X is width, Y is height, Z is depth
-            const v0 = vertexOffset;
-            const halfDepth = extrudeDepth / 2;
-
-            // Front face (z = centerZ + halfDepth)
-            pos.push(minX, minY, centerZ + halfDepth);
-            pos.push(maxX, minY, centerZ + halfDepth);
-            pos.push(maxX, maxY, centerZ + halfDepth);
-            pos.push(minX, maxY, centerZ + halfDepth);
-
-            // Back face (z = centerZ - halfDepth)
-            pos.push(minX, minY, centerZ - halfDepth);
-            pos.push(maxX, minY, centerZ - halfDepth);
-            pos.push(maxX, maxY, centerZ - halfDepth);
-            pos.push(minX, maxY, centerZ - halfDepth);
-
-            for (let i = 0; i < 8; i++) {
-                colors.push(...color, 255);
-            }
-
-            // Front face
-            indices.push(v0+0, v0+1, v0+2, v0+0, v0+2, v0+3);
-            // Back face
-            indices.push(v0+4, v0+6, v0+5, v0+4, v0+7, v0+6);
-            // Top face
-            indices.push(v0+3, v0+2, v0+6, v0+3, v0+6, v0+7);
-            // Bottom face
-            indices.push(v0+0, v0+5, v0+1, v0+0, v0+4, v0+5);
-            // Left face
-            indices.push(v0+0, v0+3, v0+7, v0+0, v0+7, v0+4);
-            // Right face
-            indices.push(v0+1, v0+5, v0+6, v0+1, v0+6, v0+2);
-
-            vertexOffset += 8;
-        }
-
-        charStartX += charWidth + charSpacing;
+    // Measure text width
+    const measureCanvas = document.createElement("canvas");
+    const measureCtx = measureCanvas.getContext("2d")!;
+    let textWidth: number;
+    if (ft.isReady) {
+        textWidth = ft.measureTextBold(text, fontSize);
+    } else {
+        measureCtx.font = `bold ${fontSize}px ${fontFamily}`;
+        textWidth = measureCtx.measureText(text).width;
     }
 
-    return { pos, colors, indices };
+    const canvasWidth = Math.ceil(textWidth + padding * 2);
+    const canvasHeight = Math.ceil(fontSize * 1.3 + padding * 2);
+
+    const canvas = document.createElement("canvas");
+    canvas.width = canvasWidth;
+    canvas.height = canvasHeight;
+    const ctx = canvas.getContext("2d", { alpha: true })!;
+
+    // Dark semi-transparent rounded background
+    ctx.beginPath();
+    ctx.moveTo(borderRadius, 0);
+    ctx.lineTo(canvasWidth - borderRadius, 0);
+    ctx.quadraticCurveTo(canvasWidth, 0, canvasWidth, borderRadius);
+    ctx.lineTo(canvasWidth, canvasHeight - borderRadius);
+    ctx.quadraticCurveTo(canvasWidth, canvasHeight, canvasWidth - borderRadius, canvasHeight);
+    ctx.lineTo(borderRadius, canvasHeight);
+    ctx.quadraticCurveTo(0, canvasHeight, 0, canvasHeight - borderRadius);
+    ctx.lineTo(0, borderRadius);
+    ctx.quadraticCurveTo(0, 0, borderRadius, 0);
+    ctx.closePath();
+    ctx.fillStyle = "rgba(10, 12, 18, 0.82)";
+    ctx.fill();
+
+    // Subtle border
+    ctx.strokeStyle = `rgba(${color[0]}, ${color[1]}, ${color[2]}, 0.5)`;
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+
+    // Draw text (shadow first for depth)
+    const colorStr = `rgb(${color[0]}, ${color[1]}, ${color[2]})`;
+    const textY = padding + fontSize;
+
+    // Shadow pass
+    if (ft.isReady) {
+        ft.drawTextBold(ctx, text, padding + 1, textY + 1, fontSize, "rgba(0,0,0,0.6)");
+        ft.drawTextBold(ctx, text, padding, textY, fontSize, colorStr);
+    } else {
+        ctx.font = `bold ${fontSize}px ${fontFamily}`;
+        ctx.fillStyle = "rgba(0,0,0,0.6)";
+        ctx.fillText(text, padding + 1, textY + 1);
+        ctx.fillStyle = colorStr;
+        ctx.fillText(text, padding, textY);
+    }
+
+    return {
+        imageData: ctx.getImageData(0, 0, canvasWidth, canvasHeight),
+        width: canvasWidth,
+        height: canvasHeight,
+    };
 }
 
 export interface TileMarker {
@@ -626,11 +419,51 @@ export interface NPCWanderMarker {
     skipIfNotVisible?: boolean;  // Return null immediately if chunk not visible
 }
 
-// Active overlays - keyed by GlOverlay object
-const activeOverlays = new Map<patchrs.GlOverlay, { description: string }>();
+// Active overlays - keyed by GlOverlay object, tracks associated GL resources for disposal
+interface OverlayEntry {
+    description: string;
+    resources?: {
+        program?: patchrs.GlProgram;
+        texture?: patchrs.TrackedTexture;
+        vertexArray?: patchrs.VertexArraySnapshot;
+    };
+}
+const activeOverlays = new Map<patchrs.GlOverlay, OverlayEntry>();
 
 // Floor program ID (cached)
 let floorProgramId: number | null = null;
+
+// Chunk floor cache — persists across step switches so we don't need fresh captures
+// Key: "chunkX,chunkZ:floorIndex", Value: { vertexObjectId, modelY }
+interface CachedChunkFloor {
+    vertexObjectId: number;
+    modelY: number;
+}
+const chunkFloorCache = new Map<string, CachedChunkFloor>();
+
+function getChunkFloorCacheKey(chunkX: number, chunkZ: number, floor: number): string {
+    return `${chunkX},${chunkZ}:${floor}`;
+}
+
+function cacheChunkFloor(chunkX: number, chunkZ: number, floorIndex: number, vertexObjectId: number, modelY: number): void {
+    const key = getChunkFloorCacheKey(chunkX, chunkZ, floorIndex);
+    chunkFloorCache.set(key, { vertexObjectId, modelY });
+}
+
+function getCachedChunkFloor(chunkX: number, chunkZ: number, floorIndex: number): CachedChunkFloor | null {
+    return chunkFloorCache.get(getChunkFloorCacheKey(chunkX, chunkZ, floorIndex)) ?? null;
+}
+
+/** Extract CachedChunkFloor from a live RenderInvocation and cache it */
+function cacheFromRender(render: patchrs.RenderInvocation, chunkX: number, chunkZ: number, floorIndex: number): CachedChunkFloor {
+    const chunkInfo = getChunkFromRender(render);
+    const info: CachedChunkFloor = {
+        vertexObjectId: render.vertexObjectId,
+        modelY: chunkInfo?.modelY ?? 0
+    };
+    cacheChunkFloor(chunkX, chunkZ, floorIndex, info.vertexObjectId, info.modelY);
+    return info;
+}
 
 /**
  * Parse a hex color string into RGBA tuple
@@ -691,29 +524,38 @@ function identityMatrix(): number[] {
 async function findFloorProgram(): Promise<number | null> {
     if (floorProgramId !== null) return floorProgramId;
 
-    try {
-        // MINIMAL capture - no textures, uniforms, or input data
-        // Program info (including inputs metadata) is always included
-        const renders = await patchrs.native.recordRenderCalls({ maxframes: 1,
-            framecooldown: 100,
-            features: [], // Minimal - program info is always included
-            skipProgramMask: wrongProgramMask
-        });
+    // Retry up to 3 times — first capture can miss floor geometry during
+    // loading screens, camera transitions, or frame cache timing issues
+    for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+            const renders = await patchrs.native.recordRenderCalls({ maxframes: 1,
+                framecooldown: 100,
+                features: [], // Minimal - program info is always included
+                skipProgramMask: wrongProgramMask,
+                hasInput: "aMaterialSettingsSlotXY3"
+            });
 
-        for (const render of renders) {
-            if (render.program.inputs.find(q => q.name === "aMaterialSettingsSlotXY3")) {
-                floorProgramId = render.program.programId;
-                return floorProgramId;
-            } else {
-                // Mark non-floor programs to skip
-                render.program.skipmask |= wrongProgramMask;
+            for (const render of renders) {
+                if (render.program.inputs.find(q => q.name === "aMaterialSettingsSlotXY3")) {
+                    floorProgramId = render.program.programId;
+                    return floorProgramId;
+                } else {
+                    render.program.skipmask |= wrongProgramMask;
+                }
+            }
+
+            if (attempt < 2) {
+                console.log(`[TileOverlay] No floor program found, retrying in 500ms (attempt ${attempt + 1}/3)...`);
+                await new Promise(resolve => setTimeout(resolve, 500));
+            }
+        } catch (e) {
+            console.error("[TileOverlay] Error finding floor program:", e);
+            if (attempt < 2) {
+                await new Promise(resolve => setTimeout(resolve, 500));
             }
         }
-        return null;
-    } catch (e) {
-        console.error("[TileOverlay] Error finding floor program:", e);
-        return null;
     }
+    return null;
 }
 
 /**
@@ -893,9 +735,14 @@ const FRAG_SHADER_LIGHTING = `
 // Pending markers waiting for their chunk to become visible
 const pendingMarkers: Map<string, { marker: RectMarker; resolve: (id: patchrs.GlOverlay | null) => void }> = new Map();
 
-// Active marker stream
-let markerStream: { close: () => void } | null = null;
-let knownProgs = new WeakMap<patchrs.GlProgram, {}>();
+// Polling timer for pending markers (replaces unreliable stream approach)
+let markerPollTimer: ReturnType<typeof setInterval> | null = null;
+let pollInFlight = false;
+// Use programId (stable integer) instead of object reference for caching.
+// WeakMap<GlProgram> broke under IPC proxy because each frame delivers new
+// deserialized program objects (different JS identity, same programId).
+let knownFloorProgs = new Set<number>();
+let knownWrongProgs = new Set<number>();
 
 /**
  * Get chunk key for a marker
@@ -962,10 +809,8 @@ function findBestFloorRender(
  * Create overlay for a marker on a specific floor render
  * MATCHES tilemarkers.ts EXACTLY
  */
-async function createMarkerOverlay(marker: RectMarker, floor: patchrs.RenderInvocation, chunkX: number, chunkZ: number): Promise<patchrs.GlOverlay | null> {
-    // Extract floor render's model Y to match game's terrain elevation
-    const floorChunkInfo = getChunkFromRender(floor);
-    const floorModelY = floorChunkInfo ? floorChunkInfo.modelY : 0;
+async function createMarkerOverlay(marker: RectMarker, floorInfo: CachedChunkFloor, chunkX: number, chunkZ: number): Promise<patchrs.GlOverlay | null> {
+    const floorModelY = floorInfo.modelY;
 
     // Fetch height data for this chunk
     const heightData = await fetchHeightData(chunkX, chunkZ, marker.floor ?? 0);
@@ -1133,10 +978,13 @@ async function createMarkerOverlay(marker: RectMarker, floor: patchrs.RenderInvo
         { location: 6, name: "aColor", type: GL_UNSIGNED_BYTE, length: 3 }
     ], uniforms.args);
 
-    // Position matrix - place at chunk center, matching floor render's Y elevation
+    // Position matrix - place at chunk center
+    // With height data: vertex Y values are absolute world heights, baseY is just HEIGHT_SCALING offset
+    // Without height data: vertices are flat, so baseY must match the floor's modelY
+    const baseY = heightData ? HEIGHT_SCALING : floorModelY;
     uniforms.mappings.uModelMatrix.write(positionMatrix(
         (chunkX + 0.5) * TILE_SIZE * CHUNK_SIZE,
-        floorModelY + TILE_SIZE / 32,
+        baseY,
         (chunkZ + 0.5) * TILE_SIZE * CHUNK_SIZE
     ));
 
@@ -1154,83 +1002,117 @@ async function createMarkerOverlay(marker: RectMarker, floor: patchrs.RenderInvo
     // IMPORTANT: Must specify ranges - length is number of INDICES, not triangles
     const renderRanges = [{ start: 0, length: indices.length }];
 
-    const overlayId = await patchrs.native.beginOverlay(
-        { skipProgramMask: wrongProgramMask, vertexObjectId: floor.vertexObjectId },
-        program,
-        vertex,
-        {
-            uniformSources: uniformSources,
-            uniformBuffer: new Uint8Array(uniforms.buffer.buffer),
-            ranges: renderRanges
-        }
-    );
+    let overlayId: patchrs.GlOverlay;
+    try {
+        overlayId = await patchrs.native.beginOverlay(
+            { skipProgramMask: wrongProgramMask, vertexObjectId: floorInfo.vertexObjectId },
+            program,
+            vertex,
+            {
+                uniformSources: uniformSources,
+                uniformBuffer: new Uint8Array(uniforms.buffer.buffer),
+                ranges: renderRanges
+            }
+        );
+    } catch (e) {
+        console.error(`[TileOverlay] beginOverlay FAILED for chunk ${chunkX},${chunkZ} vaoId=${floorInfo.vertexObjectId}:`, e);
+        return null;
+    }
 
     activeOverlays.set(overlayId, {
-        description: `Rect (${marker.minLng.toFixed(1)},${marker.minLat.toFixed(1)}) to (${marker.maxLng.toFixed(1)},${marker.maxLat.toFixed(1)})`
+        description: `Rect (${marker.minLng.toFixed(1)},${marker.minLat.toFixed(1)}) to (${marker.maxLng.toFixed(1)},${marker.maxLat.toFixed(1)})`,
+        resources: { program, vertexArray: vertex },
     });
 
     return overlayId;
 }
 
 /**
- * Start the marker stream (like floorTracker)
+ * Start polling for pending marker chunks via recordRenderCalls.
+ * Uses one-shot captures (lighter on shared memory than continuous streams)
+ * and leverages the launcher's frame cache for efficiency.
  */
-function ensureMarkerStream(): void {
-    if (markerStream || !patchrs.native) return;
+let pollCount = 0;
+function startMarkerPolling(): void {
+    if (markerPollTimer || !patchrs.native) return;
+    pollCount = 0;
 
-    markerStream = patchrs.native.streamRenderCalls({
-        features: ["uniforms"],
-        framecooldown: 500,
-        skipProgramMask: wrongProgramMask
-    }, async (renders) => {
-        if (pendingMarkers.size === 0) return;
+    markerPollTimer = setInterval(() => {
+        if (pendingMarkers.size === 0) {
+            stopMarkerPolling();
+            return;
+        }
+        if (pollInFlight) return; // skip if previous poll hasn't finished
+        pollInFlight = true;
+        pollCount++;
 
-        // Mark non-floor programs
-        for (const render of renders) {
-            if (!knownProgs.has(render.program)) {
+        captureWithStreamPause(() => patchrs.native.recordRenderCalls({
+            maxframes: 1,
+            features: ["uniforms"],
+            skipProgramMask: wrongProgramMask,
+            hasInput: "aMaterialSettingsSlotXY3" // IPC optimization
+        })).then(renders => {
+            if (pendingMarkers.size === 0) return;
+
+            // Classify programs
+            for (const render of renders) {
+                const pid = render.program.programId;
+                if (knownWrongProgs.has(pid) || knownFloorProgs.has(pid)) continue;
                 if (render.program.inputs.find(q => q.name === "aMaterialSettingsSlotXY3")) {
-                    knownProgs.set(render.program, {});
+                    knownFloorProgs.add(pid);
                 } else {
-                    render.program.skipmask |= wrongProgramMask;
-                    continue;
+                    knownWrongProgs.add(pid);
                 }
             }
-        }
 
-        // Collect visible chunk keys
-        const visibleChunks = new Set<string>();
-        for (const render of renders) {
-            if (render.program.skipmask & wrongProgramMask) continue;
-            const chunkInfo = getChunkFromRender(render);
-            if (chunkInfo) {
-                visibleChunks.add(`${chunkInfo.chunkX},${chunkInfo.chunkZ}`);
-            }
-        }
-
-        // Resolve pending markers using floor-aware selection
-        for (const chunkKey of visibleChunks) {
-            const pending = pendingMarkers.get(chunkKey);
-            if (pending) {
-                const [cx, cz] = chunkKey.split(",").map(Number);
-                const targetFloor = pending.marker.floor ?? 0;
-                const bestRender = findBestFloorRender(renders, cx, cz, targetFloor);
-                if (bestRender) {
-                    pendingMarkers.delete(chunkKey);
-                    const overlayId = await createMarkerOverlay(pending.marker, bestRender.render, bestRender.chunkX, bestRender.chunkZ);
-                    pending.resolve(overlayId);
+            // Collect visible chunk keys
+            const visibleChunks = new Set<string>();
+            for (const render of renders) {
+                if (knownWrongProgs.has(render.program.programId)) continue;
+                if (!render.uniformState) continue;
+                const chunkInfo = getChunkFromRender(render);
+                if (chunkInfo) {
+                    visibleChunks.add(`${chunkInfo.chunkX},${chunkInfo.chunkZ}`);
                 }
             }
-        }
-    });
+
+            if (pollCount % 5 === 1) {
+                const pendingKeys = [...pendingMarkers.keys()].join(", ");
+                const visibleKeys = [...visibleChunks].join(", ");
+                console.log(`[TilePoll] poll=${pollCount} renders=${renders.length} visible=[${visibleKeys}] pending=[${pendingKeys}]`);
+            }
+
+            // Resolve pending markers
+            for (const chunkKey of visibleChunks) {
+                const pending = pendingMarkers.get(chunkKey);
+                if (pending) {
+                    const [cx, cz] = chunkKey.split(",").map(Number);
+                    const targetFloor = pending.marker.floor ?? 0;
+                    const bestRender = findBestFloorRender(renders, cx, cz, targetFloor);
+                    if (bestRender) {
+                        pendingMarkers.delete(chunkKey);
+                        const info = cacheFromRender(bestRender.render, bestRender.chunkX, bestRender.chunkZ, targetFloor);
+                        createMarkerOverlay(pending.marker, info, bestRender.chunkX, bestRender.chunkZ)
+                            .then(overlayId => pending.resolve(overlayId));
+                    }
+                }
+            }
+        }).catch(e => {
+            console.warn("[TilePoll] Error:", e);
+        }).finally(() => {
+            pollInFlight = false;
+        });
+    }, 1500); // Poll every 1.5 seconds
 }
 
 /**
- * Stop the marker stream
+ * Stop polling for pending markers
  */
-function stopMarkerStream(): void {
-    if (markerStream) {
-        markerStream.close();
-        markerStream = null;
+function stopMarkerPolling(): void {
+    if (markerPollTimer) {
+        clearInterval(markerPollTimer);
+        markerPollTimer = null;
+        pollInFlight = false;
     }
 }
 
@@ -1249,26 +1131,27 @@ export async function addRectMarker(marker: RectMarker): Promise<patchrs.GlOverl
     const centerLat = (marker.minLat + marker.maxLat) / 2;
     const targetChunkX = Math.floor(centerLng / CHUNK_SIZE);
     const targetChunkZ = Math.floor(centerLat / CHUNK_SIZE);
+    const targetFloor = marker.floor ?? 0;
 
-    // First, try to find the chunk immediately
+    // Check chunk floor cache first — avoids expensive capture when data persists from prior step
+    const cached = getCachedChunkFloor(targetChunkX, targetChunkZ, targetFloor);
+    if (cached) {
+        console.log(`[TileOverlay] Cache hit for chunk ${targetChunkX},${targetChunkZ}:${targetFloor} vaoId=${cached.vertexObjectId}`);
+        return await createMarkerOverlay(marker, cached, targetChunkX, targetChunkZ);
+    }
+
+    // Cache miss — try to find the chunk via capture
     try {
         const renders = await patchrs.native.recordRenderCalls({ maxframes: 1,
             features: ["uniforms"],
-            skipProgramMask: wrongProgramMask
+            skipProgramMask: wrongProgramMask,
+            hasInput: "aMaterialSettingsSlotXY3" // IPC optimization: filter server-side when available
         });
 
-        // Mark non-floor programs
-        for (const render of renders) {
-            if (!render.program.inputs.find(q => q.name === "aMaterialSettingsSlotXY3")) {
-                render.program.skipmask |= wrongProgramMask;
-            }
-        }
-
-        // Find best floor render matching target floor
-        const targetFloor = marker.floor ?? 0;
         const bestRender = findBestFloorRender(renders, targetChunkX, targetChunkZ, targetFloor);
         if (bestRender) {
-            return await createMarkerOverlay(marker, bestRender.render, bestRender.chunkX, bestRender.chunkZ);
+            const info = cacheFromRender(bestRender.render, bestRender.chunkX, bestRender.chunkZ, targetFloor);
+            return await createMarkerOverlay(marker, info, bestRender.chunkX, bestRender.chunkZ);
         }
     } catch (e) {
         console.warn("[TileOverlay] Error checking immediate renders:", e);
@@ -1284,7 +1167,7 @@ export async function addRectMarker(marker: RectMarker): Promise<patchrs.GlOverl
 
     return new Promise((resolve) => {
         pendingMarkers.set(chunkKey, { marker, resolve });
-        ensureMarkerStream();
+        startMarkerPolling();
 
         // Timeout after 30 seconds
         setTimeout(() => {
@@ -1293,9 +1176,9 @@ export async function addRectMarker(marker: RectMarker): Promise<patchrs.GlOverl
                 pendingMarkers.delete(chunkKey);
                 resolve(null);
 
-                // Stop stream if no more pending markers
+                // Stop polling if no more pending markers
                 if (pendingMarkers.size === 0) {
-                    stopMarkerStream();
+                    stopMarkerPolling();
                 }
             }
         }, 30000);
@@ -1353,470 +1236,24 @@ export async function addRadiusMarker(marker: RadiusMarker): Promise<patchrs.GlO
 }
 
 /**
- * Create a combined NPC wander overlay with both wander tiles and NPC tile in one mesh
- * This is more efficient (1 draw call) and avoids timing issues
- */
-async function createNPCWanderOverlay(
-    marker: NPCWanderMarker,
-    floor: patchrs.RenderInvocation,
-    chunkX: number,
-    chunkZ: number
-): Promise<patchrs.GlOverlay | null> {
-    // Extract floor render's model Y to match game's terrain elevation
-    const floorChunkInfo = getChunkFromRender(floor);
-    const floorModelY = floorChunkInfo ? floorChunkInfo.modelY : 0;
-
-    const heightData = await fetchHeightData(chunkX, chunkZ, marker.floor ?? 0);
-    if (!heightData) {
-        console.warn("[TileOverlay] Height data unavailable, using flat fallback");
-    }
-
-    const pos: number[] = [];
-    const colorData: number[] = [];
-    const indices: number[] = [];
-
-    const rootx = -CHUNK_SIZE / 2 * TILE_SIZE;
-    const rootz = -CHUNK_SIZE / 2 * TILE_SIZE;
-
-    let vertexindex = 0;
-
-    // Barrier wall height in tile units (1 tile = TILE_SIZE world units)
-    const barrierHeight = 0.6;  // Tall wall - more visible
-    const wallThickness = 0.15; // Width/depth of the wall in tile units
-
-    // Write a 3D wall segment (box shape) for barrier effect
-    // Creates a box from ground level up to barrierHeight with wallThickness depth
-    const writeBarrierWall = (x: number, z: number, vertcol: number[], dir: number): void => {
-        // dir: 0=south, 1=east, 2=north, 3=west
-        // Each wall is a 3D box along the tile edge
-
-        // Get base height using bilinear interpolation, subtract 5*TILE_SIZE/32
-        // to align wall base flush with game terrain surface
-        const clampedX = Math.max(0, Math.min(CHUNK_SIZE - 1, x));
-        const clampedZ = Math.max(0, Math.min(CHUNK_SIZE - 1, z));
-        const baseHeight = heightData
-            ? getTerrainHeight(heightData, clampedX, clampedZ, 0.5, 0.5) - 5 * TILE_SIZE / 32
-            : 0;
-
-        const thickness = wallThickness * TILE_SIZE;
-
-        // Wall edge endpoints and normal direction for thickness
-        let x1: number, z1: number, x2: number, z2: number;
-        let nx: number, nz: number; // Normal direction (outward from wander area)
-
-        if (dir === 0) {        // South edge - wall extends in -Z
-            x1 = (x + 0) * TILE_SIZE + rootx;
-            z1 = (z + 0) * TILE_SIZE + rootz;
-            x2 = (x + 1) * TILE_SIZE + rootx;
-            z2 = (z + 0) * TILE_SIZE + rootz;
-            nx = 0; nz = -1;
-        } else if (dir === 1) { // East edge - wall extends in +X
-            x1 = (x + 1) * TILE_SIZE + rootx;
-            z1 = (z + 0) * TILE_SIZE + rootz;
-            x2 = (x + 1) * TILE_SIZE + rootx;
-            z2 = (z + 1) * TILE_SIZE + rootz;
-            nx = 1; nz = 0;
-        } else if (dir === 2) { // North edge - wall extends in +Z
-            x1 = (x + 1) * TILE_SIZE + rootx;
-            z1 = (z + 1) * TILE_SIZE + rootz;
-            x2 = (x + 0) * TILE_SIZE + rootx;
-            z2 = (z + 1) * TILE_SIZE + rootz;
-            nx = 0; nz = 1;
-        } else {                // West edge - wall extends in -X
-            x1 = (x + 0) * TILE_SIZE + rootx;
-            z1 = (z + 1) * TILE_SIZE + rootz;
-            x2 = (x + 0) * TILE_SIZE + rootx;
-            z2 = (z + 0) * TILE_SIZE + rootz;
-            nx = -1; nz = 0;
-        }
-
-        const y0 = baseHeight;                           // Ground level
-        const y1 = baseHeight + barrierHeight * TILE_SIZE; // Top of barrier
-
-        // Inner edge (on tile boundary)
-        const ix1 = x1, iz1 = z1;
-        const ix2 = x2, iz2 = z2;
-        // Outer edge (offset by thickness in normal direction)
-        const ox1 = x1 + nx * thickness, oz1 = z1 + nz * thickness;
-        const ox2 = x2 + nx * thickness, oz2 = z2 + nz * thickness;
-
-        // Color with height encoded in alpha: 0=bottom, 255=top
-        const bottomCol = [vertcol[0], vertcol[1], vertcol[2], 0];
-        const topCol = [vertcol[0], vertcol[1], vertcol[2], 255];
-
-        // Helper to add a quad (4 vertices, 2 triangles)
-        const addQuad = (
-            ax: number, ay: number, az: number, acol: number[],
-            bx: number, by: number, bz: number, bcol: number[],
-            cx: number, cy: number, cz: number, ccol: number[],
-            dx: number, dy: number, dz: number, dcol: number[]
-        ) => {
-            const v0 = vertexindex++;
-            pos.push(ax, ay, az); colorData.push(...acol);
-            const v1 = vertexindex++;
-            pos.push(bx, by, bz); colorData.push(...bcol);
-            const v2 = vertexindex++;
-            pos.push(cx, cy, cz); colorData.push(...ccol);
-            const v3 = vertexindex++;
-            pos.push(dx, dy, dz); colorData.push(...dcol);
-            // Front face
-            indices.push(v0, v1, v2);
-            indices.push(v0, v2, v3);
-            // Back face
-            indices.push(v0, v2, v1);
-            indices.push(v0, v3, v2);
-        };
-
-        // Outer face (facing outward)
-        addQuad(
-            ox1, y0, oz1, bottomCol,
-            ox2, y0, oz2, bottomCol,
-            ox2, y1, oz2, topCol,
-            ox1, y1, oz1, topCol
-        );
-
-        // Inner face (facing inward toward wander area)
-        addQuad(
-            ix2, y0, iz2, bottomCol,
-            ix1, y0, iz1, bottomCol,
-            ix1, y1, iz1, topCol,
-            ix2, y1, iz2, topCol
-        );
-
-        // Top face
-        addQuad(
-            ix1, y1, iz1, topCol,
-            ix2, y1, iz2, topCol,
-            ox2, y1, oz2, topCol,
-            ox1, y1, oz1, topCol
-        );
-
-        // Bottom face
-        addQuad(
-            ix1, y0, iz1, bottomCol,
-            ox1, y0, oz1, bottomCol,
-            ox2, y0, oz2, bottomCol,
-            ix2, y0, iz2, bottomCol
-        );
-
-        // Left end cap
-        addQuad(
-            ix1, y0, iz1, bottomCol,
-            ox1, y0, oz1, bottomCol,
-            ox1, y1, oz1, topCol,
-            ix1, y1, iz1, topCol
-        );
-
-        // Right end cap
-        addQuad(
-            ox2, y0, oz2, bottomCol,
-            ix2, y0, iz2, bottomCol,
-            ix2, y1, iz2, topCol,
-            ox2, y1, oz2, topCol
-        );
-    };
-    
-    const { bottomLeft, topRight } = marker.wanderRadius;
-    const npcTileX = Math.floor(marker.npcLocation.lng - chunkX * CHUNK_SIZE) + 1;
-    const npcTileZ = Math.floor(marker.npcLocation.lat - chunkZ * CHUNK_SIZE);
-
-    const minTileX = Math.floor(bottomLeft.lng - chunkX * CHUNK_SIZE) + 1;
-    const minTileZ = Math.floor(bottomLeft.lat - chunkZ * CHUNK_SIZE);
-    const maxTileX = Math.floor(topRight.lng - chunkX * CHUNK_SIZE) + 1;
-    const maxTileZ = Math.floor(topRight.lat - chunkZ * CHUNK_SIZE);
-
-    const wanderCol = [...marker.color];
-    // NPC tile: bright red - very noticeable
-    const npcCol = marker.npcColor ?? [255, 50, 50, 255];
-
-    // Helper to check if a tile is in the wander area
-    const isWanderTile = (x: number, z: number): boolean => {
-        return x >= minTileX && x <= maxTileX && z >= minTileZ && z <= maxTileZ;
-    };
-
-    // Write a corner fill piece where two walls meet
-    // corner: 0=SW, 1=SE, 2=NE, 3=NW
-    const writeCornerFill = (x: number, z: number, vertcol: number[], corner: number): void => {
-        const clampedX = Math.max(0, Math.min(CHUNK_SIZE - 1, x));
-        const clampedZ = Math.max(0, Math.min(CHUNK_SIZE - 1, z));
-        const baseHeight = heightData
-            ? getTerrainHeight(heightData, clampedX, clampedZ, 0.5, 0.5) - 5 * TILE_SIZE / 32
-            : 0;
-
-        const thickness = wallThickness * TILE_SIZE;
-        const y0 = baseHeight;
-        const y1 = baseHeight + barrierHeight * TILE_SIZE;
-
-        // Corner position and offsets based on which corner
-        let cx: number, cz: number;
-        let ox1: number, oz1: number, ox2: number, oz2: number;
-
-        if (corner === 0) {        // SW corner - south and west walls meet
-            cx = (x + 0) * TILE_SIZE + rootx;
-            cz = (z + 0) * TILE_SIZE + rootz;
-            ox1 = cx - thickness; oz1 = cz;           // West wall outer
-            ox2 = cx; oz2 = cz - thickness;           // South wall outer
-        } else if (corner === 1) { // SE corner - south and east walls meet
-            cx = (x + 1) * TILE_SIZE + rootx;
-            cz = (z + 0) * TILE_SIZE + rootz;
-            ox1 = cx; oz1 = cz - thickness;           // South wall outer
-            ox2 = cx + thickness; oz2 = cz;           // East wall outer
-        } else if (corner === 2) { // NE corner - north and east walls meet
-            cx = (x + 1) * TILE_SIZE + rootx;
-            cz = (z + 1) * TILE_SIZE + rootz;
-            ox1 = cx + thickness; oz1 = cz;           // East wall outer
-            ox2 = cx; oz2 = cz + thickness;           // North wall outer
-        } else {                   // NW corner - north and west walls meet
-            cx = (x + 0) * TILE_SIZE + rootx;
-            cz = (z + 1) * TILE_SIZE + rootz;
-            ox1 = cx; oz1 = cz + thickness;           // North wall outer
-            ox2 = cx - thickness; oz2 = cz;           // West wall outer
-        }
-
-        // Diagonal outer corner
-        const diagX = (corner === 0 || corner === 3) ? cx - thickness : cx + thickness;
-        const diagZ = (corner === 0 || corner === 1) ? cz - thickness : cz + thickness;
-
-        const bottomCol = [vertcol[0], vertcol[1], vertcol[2], 0];
-        const topCol = [vertcol[0], vertcol[1], vertcol[2], 255];
-
-        // Helper to add a quad
-        const addQuad = (
-            ax: number, ay: number, az: number, acol: number[],
-            bx: number, by: number, bz: number, bcol: number[],
-            cx: number, cy: number, cz: number, ccol: number[],
-            dx: number, dy: number, dz: number, dcol: number[]
-        ) => {
-            const v0 = vertexindex++;
-            pos.push(ax, ay, az); colorData.push(...acol);
-            const v1 = vertexindex++;
-            pos.push(bx, by, bz); colorData.push(...bcol);
-            const v2 = vertexindex++;
-            pos.push(cx, cy, cz); colorData.push(...ccol);
-            const v3 = vertexindex++;
-            pos.push(dx, dy, dz); colorData.push(...dcol);
-            indices.push(v0, v1, v2);
-            indices.push(v0, v2, v3);
-            indices.push(v0, v2, v1);
-            indices.push(v0, v3, v2);
-        };
-
-        // Top face of corner fill (square)
-        addQuad(
-            cx, y1, cz, topCol,
-            ox1, y1, oz1, topCol,
-            diagX, y1, diagZ, topCol,
-            ox2, y1, oz2, topCol
-        );
-
-        // Bottom face
-        addQuad(
-            cx, y0, cz, bottomCol,
-            ox2, y0, oz2, bottomCol,
-            diagX, y0, diagZ, bottomCol,
-            ox1, y0, oz1, bottomCol
-        );
-
-        // Outer diagonal faces (the two faces facing outward)
-        addQuad(
-            ox1, y0, oz1, bottomCol,
-            diagX, y0, diagZ, bottomCol,
-            diagX, y1, diagZ, topCol,
-            ox1, y1, oz1, topCol
-        );
-        addQuad(
-            diagX, y0, diagZ, bottomCol,
-            ox2, y0, oz2, bottomCol,
-            ox2, y1, oz2, topCol,
-            diagX, y1, diagZ, topCol
-        );
-
-        // Inner faces (the two faces connecting to wall inner edges)
-        addQuad(
-            cx, y0, cz, bottomCol,
-            ox1, y0, oz1, bottomCol,
-            ox1, y1, oz1, topCol,
-            cx, y1, cz, topCol
-        );
-        addQuad(
-            ox2, y0, oz2, bottomCol,
-            cx, y0, cz, bottomCol,
-            cx, y1, cz, topCol,
-            ox2, y1, oz2, topCol
-        );
-    };
-
-    // Draw barrier walls only on outer perimeter edges (islanding effect)
-    // Only draw wall if there's no adjacent wander tile on that side
-    for (let z = minTileZ; z <= maxTileZ; z++) {
-        for (let x = minTileX; x <= maxTileX; x++) {
-            const isNpcTile = (x === npcTileX && z === npcTileZ);
-            const tileColor = isNpcTile ? npcCol : wanderCol;
-
-            const hasSouth = !isWanderTile(x, z - 1);
-            const hasEast = !isWanderTile(x + 1, z);
-            const hasNorth = !isWanderTile(x, z + 1);
-            const hasWest = !isWanderTile(x - 1, z);
-
-            // Draw edges
-            if (hasSouth) writeBarrierWall(x, z, tileColor, 0);
-            if (hasEast) writeBarrierWall(x, z, tileColor, 1);
-            if (hasNorth) writeBarrierWall(x, z, tileColor, 2);
-            if (hasWest) writeBarrierWall(x, z, tileColor, 3);
-
-            // Draw corner fills where two walls meet
-            if (hasSouth && hasWest) writeCornerFill(x, z, tileColor, 0);  // SW
-            if (hasSouth && hasEast) writeCornerFill(x, z, tileColor, 1);  // SE
-            if (hasNorth && hasEast) writeCornerFill(x, z, tileColor, 2);  // NE
-            if (hasNorth && hasWest) writeCornerFill(x, z, tileColor, 3);  // NW
-        }
-    }
-
-    // Barrier shader with uTime for animated vertical wave effect
-    const uniforms = new UniformSnapshotBuilder({
-        uModelMatrix: "mat4",
-        uViewProjMatrix: "mat4",
-        uAmbientColour: "vec3",
-        uSunlightViewMatrix: "mat4",
-        uSunColour: "vec3",
-        uTime: "float"
-    });
-
-    const uniformSources: patchrs.OverlayUniformSource[] = [
-        { type: "program", name: "uViewProjMatrix", sourceName: "uViewProjMatrix" },
-        { type: "program", name: "uAmbientColour", sourceName: "uAmbientColour" },
-        { type: "program", name: "uSunlightViewMatrix", sourceName: "uSunlightViewMatrix" },
-        { type: "program", name: "uSunColour", sourceName: "uSunColour" },
-        { type: "builtin", name: "uTime", sourceName: "timestamp" }
-    ];
-
-    // Use barrier shaders for animated vertical wave wall effect
-    // aColor is RGBA where alpha encodes height (0=bottom, 1=top)
-    const program = patchrs.native.createProgram(barrierVertShader, barrierFragShader, [
-        { location: 0, name: "aPos", type: GL_FLOAT, length: 3 },
-        { location: 6, name: "aColor", type: GL_UNSIGNED_BYTE, length: 4 }  // RGBA
-    ], uniforms.args);
-
-    // Position matrix - place at chunk center, matching floor render's Y elevation
-    uniforms.mappings.uModelMatrix.write(positionMatrix(
-        (chunkX + 0.5) * TILE_SIZE * CHUNK_SIZE,
-        floorModelY + TILE_SIZE / 32,
-        (chunkZ + 0.5) * TILE_SIZE * CHUNK_SIZE
-    ));
-
-    // Create vertex array buffers
-    const indexBuffer = new Uint8Array(new Uint16Array(indices).buffer);
-    const posBuffer = new Uint8Array(new Float32Array(pos).buffer);
-    const colBuffer = Uint8Array.from(colorData);  // Like arrow does - direct conversion
-
-    const vertex = patchrs.native.createVertexArray(indexBuffer, [
-        { location: 0, buffer: posBuffer, enabled: true, normalized: false, offset: 0, scalartype: GL_FLOAT, stride: 3 * 4, vectorlength: 3 },
-        { location: 6, buffer: colBuffer, enabled: true, normalized: true, offset: 0, scalartype: GL_UNSIGNED_BYTE, stride: 4, vectorlength: 4 }  // RGBA
-    ]);
-
-    // Create overlay - ranges length must be INDEX count, not triangle count
-    const renderRanges = [{ start: 0, length: indices.length }];
-
-    // Use vertexObjectId like working tile overlays (not programId)
-    // Enable alpha blending for translucent flame effect
-    const overlayId = await patchrs.native.beginOverlay(
-        { skipProgramMask: wrongProgramMask, vertexObjectId: floor.vertexObjectId },
-        program,
-        vertex,
-        {
-            uniformSources: uniformSources,
-            uniformBuffer: new Uint8Array(uniforms.buffer.buffer),
-            ranges: renderRanges,
-            alphaBlend: true  // Enable alpha blending for flame transparency
-        }
-    );
-
-    activeOverlays.set(overlayId, { description: `NPC wander barrier` });
-
-    return overlayId;
-}
-
-/**
- * Add an NPC wander area marker using the bundle's wanderRadius format
- * Creates a single mesh with both wander tiles (cyan) and NPC tile (bright green)
- * This is 1 draw call instead of multiple
+ * Add an NPC wander area marker — simple blue outlined square
  */
 export async function addNPCWanderMarker(marker: NPCWanderMarker): Promise<patchrs.GlOverlay | null> {
-    if (!patchrs.native) {
-        console.warn("[TileOverlay] Native addon not available");
-        return null;
-    }
-
     const { bottomLeft, topRight } = marker.wanderRadius;
-    const centerLng = (bottomLeft.lng + topRight.lng) / 2;
-    const centerLat = (bottomLeft.lat + topRight.lat) / 2;
-    const targetChunkX = Math.floor(centerLng / CHUNK_SIZE);
-    const targetChunkZ = Math.floor(centerLat / CHUNK_SIZE);
-    const chunkKey = `${targetChunkX},${targetChunkZ}`;
 
-    console.log(`[WanderDebug] Target chunk: ${targetChunkX},${targetChunkZ}, NPC at lat=${marker.npcLocation.lat.toFixed(1)}, lng=${marker.npcLocation.lng.toFixed(1)}, floor=${marker.floor ?? 0}`);
-
-    // Try to find the chunk immediately - use floor selection to pick ground level
-    try {
-        const renders = await patchrs.native.recordRenderCalls({ maxframes: 1,
-            features: ["uniforms"],
-            skipProgramMask: wrongProgramMask
-        });
-
-        const floorRenderCount = renders.filter(r => r.program.inputs.find(q => q.name === "aMaterialSettingsSlotXY3")).length;
-        console.log(`[WanderDebug] Recorded ${renders.length} renders, ${floorRenderCount} are floor programs`);
-
-        // Mark non-floor programs
-        for (const render of renders) {
-            if (!render.program.inputs.find(q => q.name === "aMaterialSettingsSlotXY3")) {
-                render.program.skipmask |= wrongProgramMask;
-            }
-        }
-
-        // Log which chunks ARE visible in the renders
-        for (const render of renders) {
-            if (render.program.inputs.find(q => q.name === "aMaterialSettingsSlotXY3")) {
-                const chunkInfo = getChunkFromRender(render);
-                if (chunkInfo) {
-                    console.log(`[WanderDebug]   Floor render: chunk ${chunkInfo.chunkX},${chunkInfo.chunkZ} modelY=${chunkInfo.modelY.toFixed(1)}`);
-                }
-            }
-        }
-
-        // Find best floor render (lowest Y for floor 0)
-        const targetFloor = marker.floor ?? 0;
-        const bestRender = findBestFloorRender(renders, targetChunkX, targetChunkZ, targetFloor);
-        if (bestRender) {
-            console.log(`[WanderDebug] Found floor render for chunk ${bestRender.chunkX},${bestRender.chunkZ}`);
-            const overlay = await createNPCWanderOverlay(marker, bestRender.render, bestRender.chunkX, bestRender.chunkZ);
-            console.log(`[WanderDebug] createNPCWanderOverlay returned: ${overlay ? 'overlay created' : 'null'}`);
-            return overlay;
-        } else {
-            console.log(`[WanderDebug] No floor render found for target chunk ${targetChunkX},${targetChunkZ}`);
-        }
-    } catch (e) {
-        console.warn("[TileOverlay] Error checking immediate renders for NPC wander:", e);
-    }
-
-    // If skipIfNotVisible is set, return null instead of waiting
-    if (marker.skipIfNotVisible) {
-        return null;
-    }
-
-    console.log(`[WanderDebug] Falling back to addRectMarker`);
-
-    // Fall back to simple rect marker if chunk not found immediately
     return addRectMarker({
         minLat: bottomLeft.lat,
         minLng: bottomLeft.lng,
         maxLat: topRight.lat,
         maxLng: topRight.lng,
         color: marker.color,
-        filled: marker.filled ?? true,
+        filled: false,
         thickness: marker.thickness ?? 0.06,
-        floor: marker.floor
+        floor: marker.floor,
+        skipIfNotVisible: marker.skipIfNotVisible,
     });
 }
+
 
 /**
  * Create a batched overlay for multiple object tiles with islanding effect
@@ -1826,13 +1263,10 @@ export async function addNPCWanderMarker(marker: NPCWanderMarker): Promise<patch
  */
 async function createObjectTilesBatchedOverlay(
     group: ObjectTileGroup,
-    floor: patchrs.RenderInvocation,
+    floorInfo: CachedChunkFloor,
     chunkX: number,
     chunkZ: number
 ): Promise<patchrs.GlOverlay | null> {
-    // Extract floor render's model Y to match game's terrain elevation
-    const floorChunkInfo = getChunkFromRender(floor);
-    const floorModelY = floorChunkInfo ? floorChunkInfo.modelY : 0;
 
     const heightData = await fetchHeightData(chunkX, chunkZ, group.floor ?? 0);
     if (!heightData) {
@@ -2006,9 +1440,10 @@ async function createObjectTilesBatchedOverlay(
         { location: 6, name: "aColor", type: GL_UNSIGNED_BYTE, length: 3 }
     ], uniforms.args);
 
+    // Height data always available (early return if null)
     uniforms.mappings.uModelMatrix.write(positionMatrix(
         (chunkX + 0.5) * TILE_SIZE * CHUNK_SIZE,
-        floorModelY + TILE_SIZE / 32,
+        HEIGHT_SCALING,
         (chunkZ + 0.5) * TILE_SIZE * CHUNK_SIZE
     ));
 
@@ -2024,7 +1459,7 @@ async function createObjectTilesBatchedOverlay(
     const renderRanges = [{ start: 0, length: indices.length }];
 
     const overlayId = await patchrs.native.beginOverlay(
-        { skipProgramMask: wrongProgramMask, vertexObjectId: floor.vertexObjectId },
+        { skipProgramMask: wrongProgramMask, vertexObjectId: floorInfo.vertexObjectId },
         program,
         vertex,
         {
@@ -2035,7 +1470,8 @@ async function createObjectTilesBatchedOverlay(
     );
 
     activeOverlays.set(overlayId, {
-        description: `ObjectTileGroup "${group.name}" (${group.tiles.length} tiles)`
+        description: `ObjectTileGroup "${group.name}" (${group.tiles.length} tiles)`,
+        resources: { program, vertexArray: vertex },
     });
 
     return overlayId;
@@ -2051,14 +1487,11 @@ async function createTextLabelOverlay(
     text: string,
     centerLat: number,
     centerLng: number,
-    floor: patchrs.RenderInvocation,
+    floorInfo: CachedChunkFloor,
     chunkX: number,
     chunkZ: number,
     floorLevel: number = 0
 ): Promise<patchrs.GlOverlay | null> {
-    // Extract floor render's model Y to match game's terrain elevation
-    const floorChunkInfo = getChunkFromRender(floor);
-    const floorModelY = floorChunkInfo ? floorChunkInfo.modelY : 0;
 
     const heightData = await fetchHeightData(chunkX, chunkZ, floorLevel);
     if (!heightData) {
@@ -2089,70 +1522,78 @@ async function createTextLabelOverlay(
     const centerZ = localZ * TILE_SIZE + rootz;
     const textHeight = centerHeight + TILE_SIZE * 2;  // 2 tiles above terrain
 
-    // Generate 3D text geometry - yellow color for visibility
-    const charSize = TILE_SIZE * 0.25;  // Character size (smaller for readability)
-    const textColor: [number, number, number] = [255, 255, 0];  // Yellow
-    const textGeo = generateTextGeometry(text, centerX, centerZ, textHeight, charSize, textColor);
+    // Render text to a canvas (FreeType if ready, Canvas2D fallback)
+    const labelColor: [number, number, number] = [255, 255, 80];  // Warm yellow
+    const label = renderLabelToCanvas(text, labelColor);
 
-    if (textGeo.indices.length === 0) {
-        return null;
-    }
+    // Map canvas pixels to world units — target height ≈ 0.55 tiles (easy to read)
+    const worldHeight = TILE_SIZE * 0.55;
+    const pixelToWorld = worldHeight / label.height;
+    const worldWidth = label.width * pixelToWorld;
 
-    // Use billboard shader for text - rotates to face camera
+    // Create texture from rendered label
+    const texture = patchrs.native.createTexture(label.imageData);
+
+    // Billboard quad: 4 vertices (pos + UV), 2 triangles
+    const quadVerts = new Float32Array([
+        // pos (x, y)    UV (u, v)
+        -0.5,  0.5,      0, 0,   // top-left
+         0.5,  0.5,      1, 0,   // top-right
+         0.5, -0.5,      1, 1,   // bottom-right
+        -0.5, -0.5,      0, 1,   // bottom-left
+    ]);
+    const quadIndices = new Uint16Array([0, 1, 2, 0, 2, 3]);
+
     const uniforms = new UniformSnapshotBuilder({
         uModelMatrix: "mat4",
         uViewProjMatrix: "mat4",
-        uTextCenter: "vec3",  // Center of text for billboard rotation
-        uSunlightViewMatrix: "mat4",
-        uSunColour: "vec3",
-        uAmbientColour: "vec3"
+        uTextCenter: "vec3",
+        uTextSize: "vec2",
+        uTexture: "sampler2d",
     });
 
     const uniformSources: patchrs.OverlayUniformSource[] = [
         { type: "program", name: "uViewProjMatrix", sourceName: "uViewProjMatrix" },
-        { type: "program", name: "uSunlightViewMatrix", sourceName: "uSunlightViewMatrix" },
-        { type: "program", name: "uSunColour", sourceName: "uSunColour" },
-        { type: "program", name: "uAmbientColour", sourceName: "uAmbientColour" }
     ];
 
-    // Use billboard text shader that rotates to face camera
-    const program = patchrs.native.createProgram(textVertShader, fragshader, [
-        { location: 0, name: "aPos", type: GL_FLOAT, length: 3 },
-        { location: 6, name: "aColor", type: GL_UNSIGNED_BYTE, length: 3 }
+    const program = patchrs.native.createProgram(textVertShader, textFragShader, [
+        { location: 0, name: "aPos", type: GL_FLOAT, length: 2 },
+        { location: 1, name: "aUV", type: GL_FLOAT, length: 2 },
     ], uniforms.args);
 
     uniforms.mappings.uModelMatrix.write(positionMatrix(
         (chunkX + 0.5) * TILE_SIZE * CHUNK_SIZE,
-        floorModelY + TILE_SIZE / 32,
+        HEIGHT_SCALING,
         (chunkZ + 0.5) * TILE_SIZE * CHUNK_SIZE
     ));
+    uniforms.mappings.uTextCenter.write([centerX, textHeight + worldHeight / 2, centerZ]);
+    uniforms.mappings.uTextSize.write([worldWidth, worldHeight]);
+    uniforms.mappings.uTexture.write([0]);
 
-    // Set text center for billboard rotation (center of text in local coords)
-    // X, Y (height + half char size for vertical center), Z
-    uniforms.mappings.uTextCenter.write([centerX, textHeight + charSize / 2, centerZ]);
-
-    const indexBuffer = new Uint8Array(new Uint16Array(textGeo.indices).buffer);
-    const posBuffer = new Uint8Array(new Float32Array(textGeo.pos).buffer);
-    const colBuffer = new Uint8Array(new Uint8Array(textGeo.colors).buffer);
-
-    const vertex = patchrs.native.createVertexArray(indexBuffer, [
-        { location: 0, buffer: posBuffer, enabled: true, normalized: false, offset: 0, scalartype: GL_FLOAT, stride: 3 * 4, vectorlength: 3 },
-        { location: 6, buffer: colBuffer, enabled: true, normalized: true, offset: 0, scalartype: GL_UNSIGNED_BYTE, stride: 4, vectorlength: 3 }
-    ]);
+    const vertBuffer = new Uint8Array(quadVerts.buffer);
+    const vertex = patchrs.native.createVertexArray(
+        new Uint8Array(quadIndices.buffer),
+        [
+            { location: 0, buffer: vertBuffer, enabled: true, normalized: false, offset: 0, scalartype: GL_FLOAT, stride: 16, vectorlength: 2 },
+            { location: 1, buffer: vertBuffer, enabled: true, normalized: false, offset: 8, scalartype: GL_FLOAT, stride: 16, vectorlength: 2 },
+        ]
+    );
 
     const overlayId = await patchrs.native.beginOverlay(
-        { skipProgramMask: wrongProgramMask, vertexObjectId: floor.vertexObjectId },
+        { skipProgramMask: wrongProgramMask, vertexObjectId: floorInfo.vertexObjectId },
         program,
         vertex,
         {
-            uniformSources: uniformSources,
+            uniformSources,
             uniformBuffer: new Uint8Array(uniforms.buffer.buffer),
-            ranges: [{ start: 0, length: textGeo.indices.length }]
+            samplers: { "0": texture },
+            alphaBlend: true,
         }
     );
 
     activeOverlays.set(overlayId, {
-        description: `TextLabel "${text}" at (${centerLat.toFixed(1)}, ${centerLng.toFixed(1)})`
+        description: `TextLabel "${text}" at (${centerLat.toFixed(1)}, ${centerLng.toFixed(1)})`,
+        resources: { program, texture, vertexArray: vertex },
     });
 
     return overlayId;
@@ -2184,86 +1625,99 @@ export async function addObjectTilesBatched(group: ObjectTileGroup): Promise<pat
     const centerLng = sumLng / group.tiles.length;
     const targetChunkX = Math.floor(centerLng / CHUNK_SIZE);
     const targetChunkZ = Math.floor(centerLat / CHUNK_SIZE);
+    const targetFloor = group.floor ?? 0;
 
-    // Try to find the chunk immediately
+    // Check chunk floor cache first
+    const cached = getCachedChunkFloor(targetChunkX, targetChunkZ, targetFloor);
+    if (cached) {
+        console.log(`[TileOverlay] Object tiles cache hit for chunk ${targetChunkX},${targetChunkZ}:${targetFloor}`);
+        return await createObjectTilesFromFloorInfo(group, cached, targetChunkX, targetChunkZ, targetFloor);
+    }
+
+    // Cache miss — try to find the chunk via capture
     try {
         const renders = await patchrs.native.recordRenderCalls({ maxframes: 1,
             features: ["uniforms"],
-            skipProgramMask: wrongProgramMask
+            skipProgramMask: wrongProgramMask,
+            hasInput: "aMaterialSettingsSlotXY3" // IPC optimization: filter server-side when available
         });
 
+        // Collect visible chunks for diagnostics
+        const visibleChunks: string[] = [];
         for (const render of renders) {
-            if (render.program.inputs.find(q => q.name === "aMaterialSettingsSlotXY3")) {
+            if (render.program.inputs.find((q: any) => q.name === "aMaterialSettingsSlotXY3")) {
                 const chunkInfo = getChunkFromRender(render);
-                if (chunkInfo && chunkInfo.chunkX === targetChunkX && chunkInfo.chunkZ === targetChunkZ) {
-                    const tileOverlayId = await createObjectTilesBatchedOverlay(group, render, chunkInfo.chunkX, chunkInfo.chunkZ);
-
-                    // Create text labels - group tiles with same label and center text
-                    const tilesWithLabels = group.tiles.filter(t => t.numberLabel);
-                    if (tilesWithLabels.length > 0) {
-                        // Group tiles by their label text
-                        const labelGroups = new Map<string, { lat: number; lng: number }[]>();
-                        for (const tile of tilesWithLabels) {
-                            const label = tile.numberLabel!;
-                            if (!labelGroups.has(label)) {
-                                labelGroups.set(label, []);
-                            }
-                            labelGroups.get(label)!.push({ lat: tile.lat, lng: tile.lng });
-                        }
-
-                        // Create one label per unique text, centered on all tiles with that label
-                        for (const [labelText, tiles] of labelGroups) {
-                            try {
-                                // Calculate bounding box center of all tiles with this label
-                                const minLat = Math.min(...tiles.map(t => Math.floor(t.lat)));
-                                const maxLat = Math.max(...tiles.map(t => Math.floor(t.lat)));
-                                const minLng = Math.min(...tiles.map(t => Math.floor(t.lng)));
-                                const maxLng = Math.max(...tiles.map(t => Math.floor(t.lng)));
-
-                                // Center of bounding box (tiles span from coord to coord+1)
-                                const centerLat = (minLat + maxLat + 1) / 2;
-                                const centerLng = (minLng + maxLng + 1) / 2;
-
-                                await createTextLabelOverlay(
-                                    labelText,
-                                    centerLat,
-                                    centerLng,
-                                    render,
-                                    chunkInfo.chunkX,
-                                    chunkInfo.chunkZ,
-                                    group.floor ?? 0
-                                );
-                            } catch (e) {
-                                console.warn(`[TileOverlay] Failed to create text label "${labelText}":`, e);
-                            }
-                        }
+                if (chunkInfo) {
+                    visibleChunks.push(`${chunkInfo.chunkX},${chunkInfo.chunkZ}`);
+                    if (chunkInfo.chunkX === targetChunkX && chunkInfo.chunkZ === targetChunkZ) {
+                        const info = cacheFromRender(render, chunkInfo.chunkX, chunkInfo.chunkZ, targetFloor);
+                        return await createObjectTilesFromFloorInfo(group, info, chunkInfo.chunkX, chunkInfo.chunkZ, targetFloor);
                     }
-
-                    return tileOverlayId;
                 }
-            } else {
-                render.program.skipmask |= wrongProgramMask;
             }
         }
+
+        // Log once per unique target to help diagnose mismatches
+        if (!_objectTileWarnedChunks.has(`${targetChunkX},${targetChunkZ}`)) {
+            _objectTileWarnedChunks.add(`${targetChunkX},${targetChunkZ}`);
+            console.warn(`[TileOverlay] Chunk ${targetChunkX},${targetChunkZ} not found in ${renders.length} renders. ` +
+                `Visible floor chunks: [${[...new Set(visibleChunks)].join('; ')}]`);
+        }
     } catch (e) {
-        console.warn("[TileOverlay] Error checking immediate renders for batched tiles:", e);
+        console.warn("[TileOverlay] Error finding chunk for object tiles:", e);
     }
 
-    // Chunk not visible - fall back to individual tile markers
-    // Create individual markers (less efficient but works)
-    for (const tile of group.tiles) {
-        const color = tile.color ? (parseHexColor(tile.color) ?? group.defaultColor) : group.defaultColor;
-        await addTileMarker({
-            lat: tile.lat,
-            lng: tile.lng,
-            color: color,
-            solidFill: true,
-            floor: group.floor,
-            thickness: group.thickness
-        });
+    return null;
+}
+
+/** Shared logic for creating object tiles + text labels from cached floor info */
+async function createObjectTilesFromFloorInfo(
+    group: ObjectTileGroup,
+    floorInfo: CachedChunkFloor,
+    chunkX: number,
+    chunkZ: number,
+    floorLevel: number
+): Promise<patchrs.GlOverlay | null> {
+    const tileOverlayId = await createObjectTilesBatchedOverlay(group, floorInfo, chunkX, chunkZ);
+
+    // Create text labels - group tiles with same label and center text
+    const tilesWithLabels = group.tiles.filter(t => t.numberLabel);
+    if (tilesWithLabels.length > 0) {
+        const labelGroups = new Map<string, { lat: number; lng: number }[]>();
+        for (const tile of tilesWithLabels) {
+            const label = tile.numberLabel!;
+            if (!labelGroups.has(label)) {
+                labelGroups.set(label, []);
+            }
+            labelGroups.get(label)!.push({ lat: tile.lat, lng: tile.lng });
+        }
+
+        for (const [labelText, tiles] of labelGroups) {
+            try {
+                const minLat = Math.min(...tiles.map(t => Math.floor(t.lat)));
+                const maxLat = Math.max(...tiles.map(t => Math.floor(t.lat)));
+                const minLng = Math.min(...tiles.map(t => Math.floor(t.lng)));
+                const maxLng = Math.max(...tiles.map(t => Math.floor(t.lng)));
+
+                const centerLat = (minLat + maxLat + 1) / 2;
+                const centerLng = (minLng + maxLng + 1) / 2;
+
+                await createTextLabelOverlay(
+                    labelText,
+                    centerLat,
+                    centerLng,
+                    floorInfo,
+                    chunkX,
+                    chunkZ,
+                    floorLevel
+                );
+            } catch (e) {
+                console.warn(`[TileOverlay] Failed to create text label "${labelText}":`, e);
+            }
+        }
     }
 
-    return null; // Individual markers don't have a single ID
+    return tileOverlayId;
 }
 
 /**
@@ -2273,17 +1727,13 @@ export async function addObjectTilesBatched(group: ObjectTileGroup): Promise<pat
  */
 async function createPathTilesBatchedOverlay(
     tiles: PathTile[],
-    floor: patchrs.RenderInvocation,
+    floorInfo: CachedChunkFloor,
     chunkX: number,
     chunkZ: number,
     thickness: number,
     animated: boolean = false
 ): Promise<patchrs.GlOverlay | null> {
     if (tiles.length < 2 || !patchrs.native) return null;
-
-    // Extract floor render's model Y to match game's terrain elevation
-    const floorChunkInfo = getChunkFromRender(floor);
-    const floorModelY = floorChunkInfo ? floorChunkInfo.modelY : 0;
 
     const floorLevel = tiles[0].floor;
     const heightData = await fetchHeightData(chunkX, chunkZ, floorLevel);
@@ -2557,9 +2007,10 @@ async function createPathTilesBatchedOverlay(
         ], uniforms.args);
 
     // Position matrix - place at chunk center, matching floor render's Y elevation
+    // Height data always available (early return if null) — use HEIGHT_SCALING, not floorModelY
     uniforms.mappings.uModelMatrix.write(positionMatrix(
         (chunkX + 0.5) * TILE_SIZE * CHUNK_SIZE,
-        floorModelY + TILE_SIZE / 32,
+        HEIGHT_SCALING,
         (chunkZ + 0.5) * TILE_SIZE * CHUNK_SIZE
     ));
 
@@ -2579,7 +2030,7 @@ async function createPathTilesBatchedOverlay(
     const renderRanges = [{ start: 0, length: indices.length }];
 
     const overlayId = await patchrs.native.beginOverlay(
-        { skipProgramMask: wrongProgramMask, vertexObjectId: floor.vertexObjectId },
+        { skipProgramMask: wrongProgramMask, vertexObjectId: floorInfo.vertexObjectId },
         program,
         vertex,
         {
@@ -2590,7 +2041,10 @@ async function createPathTilesBatchedOverlay(
         }
     );
 
-    activeOverlays.set(overlayId, { description: `Path tiles${animated ? ' (animated)' : ''} (${tiles.length} tiles)` });
+    activeOverlays.set(overlayId, {
+        description: `Path tiles${animated ? ' (animated)' : ''} (${tiles.length} tiles)`,
+        resources: { program, vertexArray: vertex },
+    });
     return overlayId;
 }
 
@@ -2671,32 +2125,37 @@ export async function addPathTilesBatched(group: PathTileGroup): Promise<patchrs
     try {
         const renders = await patchrs.native.recordRenderCalls({ maxframes: 1,
             features: ["uniforms"],
-            skipProgramMask: wrongProgramMask
+            skipProgramMask: wrongProgramMask,
+            hasInput: "aMaterialSettingsSlotXY3" // IPC optimization: filter server-side when available
         });
 
-        // Build set of visible chunks
-        const visibleChunks = new Map<string, { render: patchrs.RenderInvocation; chunkX: number; chunkZ: number }>();
+        // Build set of visible chunks and cache their floor info
+        const visibleChunkInfos = new Map<string, { info: CachedChunkFloor; chunkX: number; chunkZ: number }>();
         for (const render of renders) {
-            if (render.program.inputs.find(q => q.name === "aMaterialSettingsSlotXY3")) {
+            if (render.program.inputs.find((q: any) => q.name === "aMaterialSettingsSlotXY3")) {
                 const chunkInfo = getChunkFromRender(render);
                 if (chunkInfo) {
                     const key = `${chunkInfo.chunkX},${chunkInfo.chunkZ}`;
-                    visibleChunks.set(key, { render, chunkX: chunkInfo.chunkX, chunkZ: chunkInfo.chunkZ });
+                    const info = cacheFromRender(render, chunkInfo.chunkX, chunkInfo.chunkZ, group.floor ?? 0);
+                    visibleChunkInfos.set(key, { info, chunkX: chunkInfo.chunkX, chunkZ: chunkInfo.chunkZ });
                 }
             } else {
                 render.program.skipmask |= wrongProgramMask;
             }
         }
 
-        // Create overlay for each chunk that has tiles and is visible
+        // Create overlay for each chunk that has tiles and is visible (or cached)
         for (const [chunkKey, tiles] of tilesByChunk) {
-            const visible = visibleChunks.get(chunkKey);
-            if (visible) {
+            const visible = visibleChunkInfos.get(chunkKey);
+            // Try cache if not in current capture
+            const [cx, cz] = chunkKey.split(",").map(Number);
+            const floorInfo = visible?.info ?? getCachedChunkFloor(cx, cz, group.floor ?? 0);
+            if (floorInfo) {
                 const overlayId = await createPathTilesBatchedOverlay(
                     tiles,
-                    visible.render,
-                    visible.chunkX,
-                    visible.chunkZ,
+                    floorInfo,
+                    visible?.chunkX ?? cx,
+                    visible?.chunkZ ?? cz,
                     group.thickness ?? 0.05,
                     group.animated ?? false
                 );
@@ -2716,23 +2175,52 @@ export async function addPathTilesBatched(group: PathTileGroup): Promise<patchrs
  * Remove an overlay
  */
 export async function removeOverlay(overlay: patchrs.GlOverlay): Promise<void> {
-    if (activeOverlays.has(overlay)) {
+    const entry = activeOverlays.get(overlay);
+    if (entry) {
         try {
             overlay.stop();
-            activeOverlays.delete(overlay);
         } catch (e) {
             console.warn("[TileOverlay] Error removing overlay:", e);
         }
+        // Dispose associated GL resource handles to release native shared memory
+        try { overlay.dispose?.(); } catch (_) {}
+        if (entry.resources) {
+            try { entry.resources.program?.dispose?.(); } catch (_) {}
+            try { entry.resources.texture?.dispose?.(); } catch (_) {}
+            try { entry.resources.vertexArray?.dispose?.(); } catch (_) {}
+        }
+        activeOverlays.delete(overlay);
     }
 }
 
 /**
- * Clear all overlays
+ * Clear all overlays and pending markers.
+ * Stops all overlays in parallel to avoid sequential IPC round-trips.
  */
 export async function clearAllOverlays(): Promise<void> {
-    for (const overlay of activeOverlays.keys()) {
-        await removeOverlay(overlay);
+    // Clear pending markers first — prevents the stream callback from
+    // creating new overlays for the old step while we're tearing down.
+    for (const [, entry] of pendingMarkers) {
+        entry.resolve(null);
     }
+    pendingMarkers.clear();
+
+    // Stop the marker polling — will restart when new markers are added
+    stopMarkerPolling();
+
+    // Stop all overlays and dispose their resources to release native shared memory
+    const entries = [...activeOverlays.entries()];
+    activeOverlays.clear();
+    await Promise.all(entries.map(([overlay, entry]) => {
+        try { overlay.stop(); } catch (_) {}
+        try { overlay.dispose?.(); } catch (_) {}
+        if (entry.resources) {
+            try { entry.resources.program?.dispose?.(); } catch (_) {}
+            try { entry.resources.texture?.dispose?.(); } catch (_) {}
+            try { entry.resources.vertexArray?.dispose?.(); } catch (_) {}
+        }
+        return Promise.resolve();
+    }));
 }
 
 /**
@@ -2755,6 +2243,7 @@ export function startFloorTracking(): { close: () => void } {
 export function stopFloorTracking(): void {
     clearAllOverlays();
     floorProgramId = null;
+    chunkFloorCache.clear();
 }
 
 /**
@@ -2778,7 +2267,8 @@ export async function testOverlay(): Promise<{ stop: () => void; overlayid: patc
         // Only need uniforms for matrix data - program.inputs is always included
         const renders = await patchrs.native.recordRenderCalls({ maxframes: 1,
             framecooldown: 100,
-            features: ["uniforms"] // Only uniforms, no textures
+            features: ["uniforms"], // Only uniforms, no textures
+            hasInput: "aMaterialSettingsSlotXY3" // IPC optimization: filter server-side when available
         });
 
         let playerChunkX = 50, playerChunkZ = 50; // Default
@@ -2867,7 +2357,8 @@ export async function debugFloorMatrix(): Promise<void> {
         // Only need uniforms for matrix data - program.inputs is always included
         const renders = await patchrs.native.recordRenderCalls({ maxframes: 1,
             framecooldown: 100,
-            features: ["uniforms"] // Only uniforms, no textures
+            features: ["uniforms"], // Only uniforms, no textures
+            hasInput: "aMaterialSettingsSlotXY3" // IPC optimization: filter server-side when available
         });
 
         logMemory("after recordRenderCalls");
@@ -2916,7 +2407,8 @@ export async function testSimple(): Promise<{ stop: () => void; overlayid: patch
         // program.inputs metadata is always included without "vertexarray" feature
         const renders = await patchrs.native.recordRenderCalls({ maxframes: 1,
             framecooldown: 100,
-            features: [] // Minimal - no extra data needed
+            features: [], // Minimal - no extra data needed
+            hasInput: "aMaterialSettingsSlotXY3" // IPC optimization: filter server-side when available
         });
 
         logMemory("after recordRenderCalls");
@@ -3086,7 +2578,8 @@ export async function testExact(): Promise<{ stop: () => void; overlayid: patchr
         // Capture inputs and uniforms - we need program.inputs to find floor render
         // and uniforms to read the floor Y position from uModelMatrix
         const renders = await patchrs.native.recordRenderCalls({ maxframes: 1,
-            features: ["vertexarray", "uniforms"]
+            features: ["vertexarray", "uniforms"],
+            hasInput: "aMaterialSettingsSlotXY3" // IPC optimization: filter server-side when available
         });
 
         logMemory("after recordRenderCalls");
@@ -3210,7 +2703,8 @@ export async function testBasic(): Promise<{ stop: () => void; overlayid: patchr
         // Find floor program - only request uniforms for matrix debugging
         const renders = await patchrs.native.recordRenderCalls({ maxframes: 1,
             framecooldown: 100,
-            features: ["uniforms"] // Only uniforms for debugging, no textures/inputs
+            features: ["uniforms"], // Only uniforms for debugging, no textures/inputs
+            hasInput: "aMaterialSettingsSlotXY3" // IPC optimization: filter server-side when available
         });
 
         logMemory("after recordRenderCalls");
@@ -3345,7 +2839,9 @@ export async function debugProgram(): Promise<void> {
         console.log("[debugProgram] Renderer info:", renderer);
 
         // Find floor render
-        const renders = await patchrs.native.recordRenderCalls({ maxframes: 1, features: [] });
+        const renders = await patchrs.native.recordRenderCalls({ maxframes: 1, features: [],
+            hasInput: "aMaterialSettingsSlotXY3" // IPC optimization: filter server-side when available
+        });
         console.log(`[debugProgram] Got ${renders.length} render calls`);
 
         let floor: patchrs.RenderInvocation | null = null;
@@ -3659,7 +3155,8 @@ export async function testTerrainConforming(): Promise<{ stop: () => void; overl
 
         // Find floor render to get current position
         const renders = await patchrs.native.recordRenderCalls({ maxframes: 1,
-            features: ["vertexarray", "uniforms"]
+            features: ["vertexarray", "uniforms"],
+            hasInput: "aMaterialSettingsSlotXY3" // IPC optimization: filter server-side when available
         });
 
         let floor: patchrs.RenderInvocation | null = null;
@@ -3852,6 +3349,400 @@ export async function testTerrainConforming(): Promise<{ stop: () => void; overl
     }
 }
 
+// ============================================================================
+// Floor Visualization — renders all visible floor chunks color-coded by level
+// ============================================================================
+
+const FLOOR_COLORS: [number, number, number, number][] = [
+    [40, 200, 80, 140],    // Floor 0 (ground) — green
+    [60, 130, 230, 140],   // Floor 1 — blue
+    [180, 60, 220, 140],   // Floor 2 — purple
+    [230, 160, 40, 140],   // Floor 3 — orange
+    [220, 60, 60, 140],    // Floor 4 — red
+    [60, 220, 220, 140],   // Floor 5 — cyan
+];
+
+let floorVizOverlays: patchrs.GlOverlay[] = [];
+
+/**
+ * Visualize all visible floor chunks as color-coded overlays.
+ * Each floor level gets a distinct color. Shows chunk boundaries,
+ * floor level, and world Y position.
+ *
+ * Call `stopFloorViz()` (or `clearFloorViz()`) to remove.
+ */
+export async function visualizeFloors(): Promise<{ chunkCount: number; stop: () => void }> {
+    // Clean up previous visualization
+    stopFloorViz();
+
+    if (!patchrs.native) {
+        console.error("[FloorViz] Native addon not available");
+        return { chunkCount: 0, stop: stopFloorViz };
+    }
+
+    // Capture renders and filter for floor programs client-side.
+    // No timeout (causes native addon to return 0), no hasInput (filter locally).
+    let renders: patchrs.RenderInvocation[] = [];
+    for (let attempt = 0; attempt < 3; attempt++) {
+        const allRenders = await patchrs.native.recordRenderCalls({
+            maxframes: 1,
+            features: ["uniforms"],
+        });
+        renders = allRenders.filter((r: any) => r.program?.inputs?.find((q: any) => q.name === "aMaterialSettingsSlotXY3"));
+        console.log(`[FloorViz] Attempt ${attempt + 1}: ${allRenders.length} total, ${renders.length} floor renders`);
+        if (renders.length > 0) break;
+        if (attempt < 2) {
+            await new Promise(resolve => setTimeout(resolve, 500));
+        }
+    }
+    if (renders.length === 0) {
+        console.error("[FloorViz] No floor renders found after 3 attempts");
+        return { chunkCount: 0, stop: stopFloorViz };
+    }
+
+    // Group by chunk, collect unique floors (deduplicate by vaoId)
+    const chunkMap = new Map<string, { chunkX: number; chunkZ: number; floors: { modelY: number; vaoId: number }[] }>();
+
+    for (const render of renders) {
+        if (!render.program.inputs.find((q: any) => q.name === "aMaterialSettingsSlotXY3")) continue;
+        const info = getChunkFromRender(render);
+        if (!info) continue;
+
+        const key = `${info.chunkX},${info.chunkZ}`;
+        if (!chunkMap.has(key)) {
+            chunkMap.set(key, { chunkX: info.chunkX, chunkZ: info.chunkZ, floors: [] });
+        }
+        const chunk = chunkMap.get(key)!;
+        // Deduplicate: skip if we already have this vaoId (same geometry drawn in multiple passes)
+        if (!chunk.floors.some(f => f.vaoId === render.vertexObjectId)) {
+            chunk.floors.push({ modelY: info.modelY, vaoId: render.vertexObjectId });
+        }
+    }
+
+    console.log(`[FloorViz] Found ${chunkMap.size} chunks with ${renders.length} render calls (deduplicated to unique VAOs)`);
+    console.log(`[FloorViz] Color key: 🟢 Floor 0  🔵 Floor 1  🟣 Floor 2  🟠 Floor 3  🔴 Floor 4  🩵 Floor 5`);
+
+    // Sort floors within each chunk by Y ascending (lowest = floor 0)
+    for (const chunk of chunkMap.values()) {
+        chunk.floors.sort((a, b) => a.modelY - b.modelY);
+    }
+
+    // Create overlays — one border-only rect per chunk per floor level
+    const overlays: patchrs.GlOverlay[] = [];
+
+    for (const [key, chunk] of chunkMap) {
+        for (let floorIdx = 0; floorIdx < chunk.floors.length; floorIdx++) {
+            const floor = chunk.floors[floorIdx];
+            const color = FLOOR_COLORS[floorIdx % FLOOR_COLORS.length];
+
+            // Cache this floor data
+            cacheChunkFloor(chunk.chunkX, chunk.chunkZ, floorIdx, floor.vaoId, floor.modelY);
+
+            // Inset each floor level slightly so stacked floors are visible
+            const inset = floorIdx * 2; // tiles inward per level
+
+            const minLng = chunk.chunkX * CHUNK_SIZE + inset;
+            const maxLng = (chunk.chunkX + 1) * CHUNK_SIZE - 1 - inset;
+            const minLat = chunk.chunkZ * CHUNK_SIZE + inset;
+            const maxLat = (chunk.chunkZ + 1) * CHUNK_SIZE - 1 - inset;
+
+            // Skip if inset consumed the entire chunk
+            if (minLng > maxLng || minLat > maxLat) continue;
+
+            try {
+                const overlay = await addRectMarker({
+                    minLat, maxLat, minLng, maxLng,
+                    color,
+                    filled: false,     // Border only — shows chunk boundary
+                    thickness: 0.08,
+                    floor: floorIdx,
+                    skipIfNotVisible: true
+                });
+
+                if (overlay) {
+                    overlays.push(overlay);
+                    console.log(
+                        `  Chunk (${chunk.chunkX}, ${chunk.chunkZ}) floor ${floorIdx}: ` +
+                        `Y=${floor.modelY.toFixed(0)} vaoId=${floor.vaoId} ` +
+                        `[${maxLng - minLng + 1}x${maxLat - minLat + 1} tiles]`
+                    );
+                }
+            } catch (e) {
+                console.warn(`[FloorViz] Failed overlay for chunk ${key} floor ${floorIdx}:`, e);
+            }
+        }
+    }
+
+    floorVizOverlays = overlays;
+    console.log(`[FloorViz] Created ${overlays.length} overlays across ${chunkMap.size} chunks`);
+
+    return { chunkCount: chunkMap.size, stop: stopFloorViz };
+}
+
+/**
+ * Remove all floor visualization overlays.
+ */
+export function stopFloorViz(): void {
+    for (const overlay of floorVizOverlays) {
+        try { overlay.stop(); } catch (_) {}
+    }
+    if (floorVizOverlays.length > 0) {
+        console.log(`[FloorViz] Cleared ${floorVizOverlays.length} overlays`);
+    }
+    floorVizOverlays = [];
+}
+
+// ============================================================================
+// Height Data Heatmap Visualization
+// ============================================================================
+
+let heightmapVizOverlays: patchrs.GlOverlay[] = [];
+
+/**
+ * Map a normalized value (0-1) to a heatmap color.
+ * Blue (low) → Cyan → Green → Yellow → Red (high)
+ */
+function heatmapColor(t: number): [number, number, number, number] {
+    t = Math.max(0, Math.min(1, t));
+    let r: number, g: number, b: number;
+    if (t < 0.25) {
+        const s = t / 0.25;
+        r = 0; g = Math.floor(255 * s); b = 255;
+    } else if (t < 0.5) {
+        const s = (t - 0.25) / 0.25;
+        r = 0; g = 255; b = Math.floor(255 * (1 - s));
+    } else if (t < 0.75) {
+        const s = (t - 0.5) / 0.25;
+        r = Math.floor(255 * s); g = 255; b = 0;
+    } else {
+        const s = (t - 0.75) / 0.25;
+        r = 255; g = Math.floor(255 * (1 - s)); b = 0;
+    }
+    return [r, g, b, 255];
+}
+
+/**
+ * Visualize height data as a colored heatmap over visible chunks.
+ * Each tile is colored based on its terrain height — blue (low) through red (high).
+ * Heights are normalized per-chunk for maximum contrast.
+ *
+ * @param level - Height data level (0-3, default 0 = ground floor)
+ * @param resolution - Tile step (1 = every tile, 2 = every other, etc.)
+ *
+ * Call `stopHeightmapViz()` to remove.
+ */
+export async function visualizeHeightmap(level: number = 0, resolution: number = 1): Promise<{ chunkCount: number; stop: () => void }> {
+    stopHeightmapViz();
+
+    if (!patchrs.native) {
+        console.error("[HeightmapViz] Native addon not available");
+        return { chunkCount: 0, stop: stopHeightmapViz };
+    }
+
+    // Capture WITHOUT hasInput to bypass IPC-level filtering entirely.
+    // The hasInput filter in ipc-handlers.ts runs on native objects before
+    // serialization — if it fails silently, we get 0 renders.
+    let renders: patchrs.RenderInvocation[] = [];
+    for (let attempt = 0; attempt < 3; attempt++) {
+        const allRenders = await patchrs.native.recordRenderCalls({
+            maxframes: 1,
+            features: ["uniforms"],
+        });
+        console.log(`[HeightmapViz] Attempt ${attempt + 1}: ${allRenders.length} total renders from capture`);
+
+        // Client-side filter for floor programs
+        renders = allRenders.filter((r: any) => {
+            const inputs = r.program?.inputs;
+            if (!inputs) return false;
+            return inputs.find((q: any) => q.name === "aMaterialSettingsSlotXY3");
+        });
+        console.log(`[HeightmapViz]   Floor renders after client filter: ${renders.length}`);
+
+        if (renders.length === 0 && allRenders.length > 0) {
+            // Log sample program input names to diagnose
+            const samples = allRenders.slice(0, 5).map((r: any) => ({
+                progId: r.program?.programId,
+                inputCount: r.program?.inputs?.length ?? 0,
+                inputNames: r.program?.inputs?.map?.((i: any) => i.name)?.slice?.(0, 3) ?? [],
+            }));
+            console.log(`[HeightmapViz]   Sample programs:`, JSON.stringify(samples));
+        }
+
+        if (renders.length > 0) break;
+        if (attempt < 2) {
+            console.log(`[HeightmapViz] Retrying in 500ms...`);
+            await new Promise(resolve => setTimeout(resolve, 500));
+        }
+    }
+    if (renders.length === 0) {
+        console.error("[HeightmapViz] No floor renders found after 3 attempts");
+        return { chunkCount: 0, stop: stopHeightmapViz };
+    }
+
+    // Get unique chunks (first vaoId per chunk is enough for triggering)
+    const chunkMap = new Map<string, { chunkX: number; chunkZ: number; vaoId: number; modelY: number }>();
+    for (const render of renders) {
+        if (!render.program.inputs.find((q: any) => q.name === "aMaterialSettingsSlotXY3")) continue;
+        const info = getChunkFromRender(render);
+        if (!info) continue;
+        const key = `${info.chunkX},${info.chunkZ}`;
+        if (!chunkMap.has(key)) {
+            chunkMap.set(key, { chunkX: info.chunkX, chunkZ: info.chunkZ, vaoId: render.vertexObjectId, modelY: info.modelY });
+        }
+    }
+
+    console.log(`[HeightmapViz] Found ${chunkMap.size} visible chunks, fetching height data for level ${level}...`);
+
+    const overlays: patchrs.GlOverlay[] = [];
+    const heightScaling = TILE_SIZE / 32;
+    const rootx = -CHUNK_SIZE / 2 * TILE_SIZE;
+    const rootz = -CHUNK_SIZE / 2 * TILE_SIZE;
+
+    for (const [key, chunk] of chunkMap) {
+        const heightData = await fetchHeightData(chunk.chunkX, chunk.chunkZ, level);
+        if (!heightData) {
+            console.log(`[HeightmapViz] No height data for chunk ${key} level ${level}`);
+            continue;
+        }
+
+        // Find min/max heights for per-chunk normalization
+        let minH = Infinity, maxH = -Infinity;
+        for (let z = 0; z < CHUNK_SIZE; z += resolution) {
+            for (let x = 0; x < CHUNK_SIZE; x += resolution) {
+                const idx = (x + z * CHUNK_SIZE) * 5;
+                const avg = (heightData[idx] + heightData[idx + 1] + heightData[idx + 2] + heightData[idx + 3]) / 4;
+                if (avg > 0) {
+                    minH = Math.min(minH, avg);
+                    maxH = Math.max(maxH, avg);
+                }
+            }
+        }
+
+        if (minH === Infinity) {
+            console.log(`[HeightmapViz] No valid height data in chunk ${key}`);
+            continue;
+        }
+        const range = maxH - minH || 1;
+
+        // Build per-tile solid quads with height-based colors
+        const pos: number[] = [];
+        const colorData: number[] = [];
+        const indices: number[] = [];
+        let vertexIndex = 0;
+
+        for (let tz = 0; tz < CHUNK_SIZE; tz += resolution) {
+            for (let tx = 0; tx < CHUNK_SIZE; tx += resolution) {
+                const tileIdx = (tx + tz * CHUNK_SIZE) * 5;
+                const avg = (heightData[tileIdx] + heightData[tileIdx + 1] + heightData[tileIdx + 2] + heightData[tileIdx + 3]) / 4;
+                if (avg === 0) continue;
+
+                const t = (avg - minH) / range;
+                const col = heatmapColor(t);
+                const heightOffset = 2 / 32;
+
+                // Add vertex at sub-tile corner with bilinear height interpolation
+                const addVert = (subx: number, subz: number): number => {
+                    const dx = 0.5 + subx;
+                    const dz = 0.5 + subz;
+                    const y00 = heightData[tileIdx + 0] * heightScaling * (1 - dx) * (1 - dz);
+                    const y01 = heightData[tileIdx + 1] * heightScaling * dx * (1 - dz);
+                    const y10 = heightData[tileIdx + 2] * heightScaling * (1 - dx) * dz;
+                    const y11 = heightData[tileIdx + 3] * heightScaling * dx * dz;
+
+                    pos.push(
+                        (tx + dx) * TILE_SIZE + rootx,
+                        y00 + y01 + y10 + y11 + heightOffset * TILE_SIZE,
+                        (tz + dz) * TILE_SIZE + rootz
+                    );
+                    colorData.push(col[0], col[1], col[2], 255);
+                    return vertexIndex++;
+                };
+
+                const v0 = addVert(-0.5, -0.5); // SW
+                const v1 = addVert(0.5, -0.5);  // SE
+                const v2 = addVert(0.5, 0.5);   // NE
+                const v3 = addVert(-0.5, 0.5);  // NW
+
+                indices.push(v0, v2, v1);
+                indices.push(v0, v3, v2);
+            }
+        }
+
+        if (indices.length === 0) continue;
+
+        // Create overlay program and buffers (same pattern as createMarkerOverlay)
+        const uniforms = new UniformSnapshotBuilder({
+            uModelMatrix: "mat4",
+            uViewProjMatrix: "mat4",
+            uAmbientColour: "vec3",
+            uSunlightViewMatrix: "mat4",
+            uSunColour: "vec3",
+            uMouse: "vec2"
+        });
+
+        const uniformSources: patchrs.OverlayUniformSource[] = [
+            { type: "program", name: "uViewProjMatrix", sourceName: "uViewProjMatrix" },
+            { type: "program", name: "uAmbientColour", sourceName: "uAmbientColour" },
+            { type: "program", name: "uSunlightViewMatrix", sourceName: "uSunlightViewMatrix" },
+            { type: "program", name: "uSunColour", sourceName: "uSunColour" },
+            { type: "builtin", name: "uMouse", sourceName: "mouse" }
+        ];
+
+        const program = patchrs.native.createProgram(VERT_SHADER_LIGHTING, FRAG_SHADER_LIGHTING, [
+            { location: 0, name: "aPos", type: GL_FLOAT, length: 3 },
+            { location: 6, name: "aColor", type: GL_UNSIGNED_BYTE, length: 3 }
+        ], uniforms.args);
+
+        uniforms.mappings.uModelMatrix.write(positionMatrix(
+            (chunk.chunkX + 0.5) * TILE_SIZE * CHUNK_SIZE,
+            HEIGHT_SCALING,
+            (chunk.chunkZ + 0.5) * TILE_SIZE * CHUNK_SIZE
+        ));
+
+        const indexBuffer = new Uint8Array(new Uint16Array(indices).buffer);
+        const posBuffer = new Uint8Array(Float32Array.from(pos).buffer);
+        const colBuffer = new Uint8Array(Uint8Array.from(colorData).buffer);
+
+        const vertex = patchrs.native.createVertexArray(indexBuffer, [
+            { location: 0, buffer: posBuffer, enabled: true, normalized: false, offset: 0, scalartype: GL_FLOAT, stride: 3 * 4, vectorlength: 3 },
+            { location: 6, buffer: colBuffer, enabled: true, normalized: true, offset: 0, scalartype: GL_UNSIGNED_BYTE, stride: 4, vectorlength: 3 }
+        ]);
+
+        try {
+            const overlay = await patchrs.native.beginOverlay(
+                { skipProgramMask: wrongProgramMask, vertexObjectId: chunk.vaoId },
+                program,
+                vertex,
+                { uniformSources, uniformBuffer: new Uint8Array(uniforms.buffer.buffer), ranges: [{ start: 0, length: indices.length }] }
+            );
+            overlays.push(overlay);
+            console.log(
+                `  Chunk (${chunk.chunkX},${chunk.chunkZ}): ` +
+                `${indices.length / 3} triangles, height ${minH.toFixed(0)}\u2013${maxH.toFixed(0)} (range ${range.toFixed(0)})`
+            );
+        } catch (e) {
+            console.warn(`[HeightmapViz] Failed overlay for chunk ${key}:`, e);
+        }
+    }
+
+    heightmapVizOverlays = overlays;
+    console.log(`[HeightmapViz] Created ${overlays.length} heatmap overlays (blue=low, green=mid, red=high)`);
+    return { chunkCount: chunkMap.size, stop: stopHeightmapViz };
+}
+
+/**
+ * Remove all heightmap visualization overlays.
+ */
+export function stopHeightmapViz(): void {
+    for (const overlay of heightmapVizOverlays) {
+        try { overlay.stop(); } catch (_) {}
+    }
+    if (heightmapVizOverlays.length > 0) {
+        console.log(`[HeightmapViz] Cleared ${heightmapVizOverlays.length} overlays`);
+    }
+    heightmapVizOverlays = [];
+}
+
 // Expose for console debugging
 if (typeof globalThis !== 'undefined') {
     (globalThis as any).testExact = testExact;
@@ -3871,6 +3762,10 @@ if (typeof globalThis !== 'undefined') {
     (globalThis as any).testFrameEnd = testFrameEnd;
     (globalThis as any).checkNative = checkNative;
     (globalThis as any).testTerrainConforming = testTerrainConforming;
+    (globalThis as any).visualizeFloors = visualizeFloors;
+    (globalThis as any).stopFloorViz = stopFloorViz;
+    (globalThis as any).visualizeHeightmap = visualizeHeightmap;
+    (globalThis as any).stopHeightmapViz = stopHeightmapViz;
     // Also use ov4 like alt1gl does
     (globalThis as any).ov4 = testExact;
 }

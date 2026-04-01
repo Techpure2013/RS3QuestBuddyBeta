@@ -209,6 +209,11 @@ const rendererConfig = {
 					to: "appconfig.local.json",
 					noErrorOnMissing: true,
 				},
+				{
+					from: "../node_modules/freetype-wasm/dist/freetype.wasm",
+					to: "assets/freetype.wasm",
+					noErrorOnMissing: true,
+				},
 			],
 		}),
 	],

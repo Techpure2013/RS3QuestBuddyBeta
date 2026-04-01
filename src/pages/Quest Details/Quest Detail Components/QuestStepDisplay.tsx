@@ -1,6 +1,7 @@
-import React from "react";
+import React, { useState, useCallback } from "react";
 import {
 	Accordion,
+	Checkbox,
 	Text,
 	Title,
 	List,
@@ -21,6 +22,7 @@ import {
 	IconPointFilled,
 	IconHourglassLow,
 	IconMap2,
+	IconTable,
 } from "@tabler/icons-react";
 import type { QuestStep } from "../../../state/types";
 import { QuestImage } from "./../../../Fetchers/handleNewImage";
@@ -36,6 +38,65 @@ import {
 	resolveStepId,
 } from "./../../../util/plotLinks";
 import { RichText } from "./../../../util/RichText";
+import { TablePopup } from "./../../../Components/TablePopup";
+
+// Table data type for popup
+interface TableStyle {
+	borderColor: string;
+	headerBgColor: string;
+	headerTextColor: string;
+	evenRowBgColor: string;
+	oddRowBgColor: string;
+}
+
+interface TableData {
+	headers: string[];
+	rows: string[][];
+	style: TableStyle;
+}
+
+// Helper function to extract table data from text containing {{table|...}} syntax
+function extractTableFromText(text: string): TableData | null {
+	const match = text.match(/\{\{table\|([^}]+)\}\}/);
+	if (!match) return null;
+
+	const parts = match[1].split("|");
+	const style: TableStyle = {
+		borderColor: "#5a4a3a",
+		headerBgColor: "#2a2318",
+		headerTextColor: "#c4a87a",
+		evenRowBgColor: "#1e1a14",
+		oddRowBgColor: "#2a2318",
+	};
+
+	const dataParts: string[] = [];
+	for (const part of parts) {
+		if (part.startsWith("border:")) {
+			style.borderColor = part.substring(7);
+		} else if (part.startsWith("hbg:")) {
+			style.headerBgColor = part.substring(4);
+		} else if (part.startsWith("htx:")) {
+			style.headerTextColor = part.substring(4);
+		} else if (part.startsWith("ebg:")) {
+			style.evenRowBgColor = part.substring(4);
+		} else if (part.startsWith("obg:")) {
+			style.oddRowBgColor = part.substring(4);
+		} else {
+			dataParts.push(part);
+		}
+	}
+
+	// Trim cells so space-padded empty cells (from serializer) become ""
+	const dataString = dataParts.join("|");
+	const segments = dataString.split("||");
+	const headers = segments[0] ? segments[0].split("|").map(h => h.trim()) : [];
+	const rows = segments.slice(1)
+		.filter(seg => seg.trim())
+		.map(seg => seg.split("|").map(c => c.trim()));
+
+	return { headers, rows, style };
+}
+
 type CompactQuestStepProps = {
 	safeQuestName: string;
 	step: QuestStep;
@@ -69,11 +130,44 @@ export const CompactQuestStep: React.FC<CompactQuestStepProps> = ({
 		buildPlotLink(quest, index),
 	);
 	const { settings } = useSettingsStore();
+
+	// Item checklist state
+	const [checkedRequired, setCheckedRequired] = useState<Set<number>>(new Set());
+	const [checkedRecommended, setCheckedRecommended] = useState<Set<number>>(new Set());
+
+	const toggleRequired = useCallback((i: number) => {
+		setCheckedRequired((prev) => {
+			const next = new Set(prev);
+			next.has(i) ? next.delete(i) : next.add(i);
+			return next;
+		});
+	}, []);
+
+	const toggleRecommended = useCallback((i: number) => {
+		setCheckedRecommended((prev) => {
+			const next = new Set(prev);
+			next.has(i) ? next.delete(i) : next.add(i);
+			return next;
+		});
+	}, []);
+
 	const hasRequiredItems = filteredRequired.length > 0;
 	const hasRecommendedItems = filteredRecommended.length > 0;
 	const hasItems = hasRequiredItems || hasRecommendedItems;
 
+	const allRequiredChecked = hasRequiredItems && checkedRequired.size === filteredRequired.length;
+	const allRecommendedChecked = hasRecommendedItems && checkedRecommended.size === filteredRecommended.length;
+	const allItemsChecked = (!hasRequiredItems || allRequiredChecked) && (!hasRecommendedItems || allRecommendedChecked);
+
 	const hasImages = images && images.length > 0;
+
+	const [tablePopupOpen, setTablePopupOpen] = useState(false);
+	const [selectedTable, setSelectedTable] = useState<TableData | null>(null);
+
+	const handleTableClick = (table: TableData) => {
+		setSelectedTable(table);
+		setTablePopupOpen(true);
+	};
 
 	const swapResult = useQuestConditionalSwap(quest, step);
 
@@ -111,6 +205,10 @@ export const CompactQuestStep: React.FC<CompactQuestStepProps> = ({
 	);
 	const hasAdditionalInfo = filteredInfo.length > 0;
 	const hasPanelContent = hasItems || hasAdditionalInfo;
+
+	// Extract table data from step description for the ActionIcon
+	const tableData = extractTableFromText(displayStepDescription);
+	const hasTable = tableData !== null;
 	function normalizeBase(url: string): string {
 		const withSlash = url.endsWith("/") ? url : url + "/";
 		return withSlash.replace(/([^:]\/)\/+/g, "$1");
@@ -180,7 +278,7 @@ export const CompactQuestStep: React.FC<CompactQuestStepProps> = ({
 							<Text fw={700} component="span" c={settings.labelColor}>
 								Step {index + 1}:{" "}
 							</Text>
-							<RichText>{displayStepDescription}</RichText>
+							<RichText onStepClick={(step) => onStepClick?.(step - 1)} onTableClick={handleTableClick} buttonColor={settings.buttonColor}>{displayStepDescription}</RichText>
 						</Text>
 					</Box>
 
@@ -194,9 +292,11 @@ export const CompactQuestStep: React.FC<CompactQuestStepProps> = ({
 							<IconChecklist
 								size={18}
 								color={
-									isCompleted
+									allRequiredChecked
 										? "var(--mantine-color-teal-6)"
-										: "var(--mantine-color-blue-6)"
+										: isCompleted
+											? "var(--mantine-color-teal-6)"
+											: "var(--mantine-color-blue-6)"
 								}
 								title="Has required items"
 							/>
@@ -205,9 +305,11 @@ export const CompactQuestStep: React.FC<CompactQuestStepProps> = ({
 							<IconHourglassLow
 								size={18}
 								color={
-									isCompleted
+									allRecommendedChecked
 										? "var(--mantine-color-teal-6)"
-										: "var(--mantine-color-gray-6)"
+										: isCompleted
+											? "var(--mantine-color-teal-6)"
+											: "var(--mantine-color-gray-6)"
 								}
 								title="Has recommended items"
 							/>
@@ -222,6 +324,19 @@ export const CompactQuestStep: React.FC<CompactQuestStepProps> = ({
 								}
 								title="Has additional information"
 							/>
+						)}
+						{hasTable && tableData && (
+							<div onClick={(e) => e.stopPropagation()}>
+								<ActionIcon
+									component="div"
+									variant="subtle"
+									color={isCompleted ? "teal" : "grape"}
+									title="View table"
+									onClick={() => handleTableClick(tableData)}
+								>
+									<IconTable size={18} />
+								</ActionIcon>
+							</div>
 						)}
 						{hasImages &&
 							images.map((image, imgIndex) => {
@@ -267,12 +382,30 @@ export const CompactQuestStep: React.FC<CompactQuestStepProps> = ({
 				{hasPanelContent && (
 					<Stack>
 						{hasItems && (
-							<Paper p="xs" withBorder radius="md">
+							<Paper
+								p="xs"
+								withBorder
+								radius="md"
+								style={allItemsChecked ? {
+									borderColor: "var(--mantine-color-teal-6)",
+									backgroundColor: "rgba(54, 147, 92, 0.08)",
+								} : undefined}
+							>
+								{allItemsChecked && (
+									<Group gap="xs" mb="xs">
+										<ThemeIcon color="teal" size={24} radius="xl">
+											<IconCircleCheck size={16} />
+										</ThemeIcon>
+										<Text size="sm" fw={600} c="teal">
+											You're ready to go!
+										</Text>
+									</Group>
+								)}
 								<Stack gap="xs">
 									{hasRequiredItems && (
 										<div>
 											<Group>
-												<ThemeIcon variant="light" color="blue" size={30}>
+												<ThemeIcon variant="light" color={allRequiredChecked ? "teal" : "blue"} size={30}>
 													<IconChecklist size={20} />
 												</ThemeIcon>
 												<Title order={6} c={settings.labelColor}>
@@ -287,21 +420,28 @@ export const CompactQuestStep: React.FC<CompactQuestStepProps> = ({
 													paddingRight: "0.625rem",
 												}}
 											>
-												<List size="sm" withPadding>
+												<Stack gap={4} pl="sm">
 													{filteredRequired.map((item, i) => (
-														<List.Item
+														<Checkbox
 															key={i}
-															icon={
-																<ThemeIcon color="gray" size={16} radius="xl">
-																	<IconPointFilled size={12} />
-																</ThemeIcon>
+															checked={checkedRequired.has(i)}
+															onChange={() => toggleRequired(i)}
+															color="teal"
+															size="sm"
+															label={
+																<Text
+																	component="span"
+																	size="sm"
+																	c={settings.textColor}
+																	td={checkedRequired.has(i) ? "line-through" : undefined}
+																	style={checkedRequired.has(i) ? { opacity: 0.6 } : undefined}
+																>
+																	<RichText onStepClick={(step) => onStepClick?.(step - 1)} onTableClick={handleTableClick} buttonColor={settings.buttonColor}>{item}</RichText>
+																</Text>
 															}
-															c={settings.textColor}
-														>
-															<RichText>{item}</RichText>
-														</List.Item>
+														/>
 													))}
-												</List>
+												</Stack>
 											</Box>
 										</div>
 									)}
@@ -311,7 +451,7 @@ export const CompactQuestStep: React.FC<CompactQuestStepProps> = ({
 									{hasRecommendedItems && (
 										<div>
 											<Group>
-												<ThemeIcon variant="light" color="gray" size={30}>
+												<ThemeIcon variant="light" color={allRecommendedChecked ? "teal" : "gray"} size={30}>
 													<IconHourglassLow size={20} />
 												</ThemeIcon>
 												<Title order={6} c={settings.labelColor}>
@@ -326,21 +466,28 @@ export const CompactQuestStep: React.FC<CompactQuestStepProps> = ({
 													paddingRight: "0.625rem",
 												}}
 											>
-												<List size="sm" withPadding>
+												<Stack gap={4} pl="sm">
 													{filteredRecommended.map((item, i) => (
-														<List.Item
+														<Checkbox
 															key={i}
-															icon={
-																<ThemeIcon color="gray" size={16} radius="xl">
-																	<IconPointFilled size={12} />
-																</ThemeIcon>
+															checked={checkedRecommended.has(i)}
+															onChange={() => toggleRecommended(i)}
+															color="teal"
+															size="sm"
+															label={
+																<Text
+																	component="span"
+																	size="sm"
+																	c={settings.textColor}
+																	td={checkedRecommended.has(i) ? "line-through" : undefined}
+																	style={checkedRecommended.has(i) ? { opacity: 0.6 } : undefined}
+																>
+																	<RichText onStepClick={(step) => onStepClick?.(step - 1)} onTableClick={handleTableClick} buttonColor={settings.buttonColor}>{item}</RichText>
+																</Text>
 															}
-															c={settings.textColor}
-														>
-															<RichText>{item}</RichText>
-														</List.Item>
+														/>
 													))}
-												</List>
+												</Stack>
 											</Box>
 										</div>
 									)}
@@ -370,7 +517,7 @@ export const CompactQuestStep: React.FC<CompactQuestStepProps> = ({
 											}
 											c={settings.textColor}
 										>
-											<RichText>{info}</RichText>
+											<RichText onStepClick={(step) => onStepClick?.(step - 1)} onTableClick={handleTableClick} buttonColor={settings.buttonColor}>{info}</RichText>
 										</List.Item>
 									))}
 								</List>
@@ -379,6 +526,11 @@ export const CompactQuestStep: React.FC<CompactQuestStepProps> = ({
 					</Stack>
 				)}
 			</Accordion.Panel>
+			<TablePopup
+				opened={tablePopupOpen}
+				onClose={() => setTablePopupOpen(false)}
+				table={selectedTable}
+			/>
 		</Accordion.Item>
 	);
 };
