@@ -86,6 +86,7 @@ const Settings: React.FC = () => {
 	const hasTextColor = !!settings.textColor;
 	const hasLabelColor = !!settings.labelColor;
 	const hasButtonColor = !!settings.buttonColor;
+	const showGlSettings = !!(window.alt1 || isGlInjectionAvailable());
 
 	return (
 		<div className="SettingsContainer">
@@ -140,83 +141,87 @@ const Settings: React.FC = () => {
 					}}
 				/>
 
-				{/* GL Features Section */}
-				<Divider
-					my="sm"
-					label={
-						<Text size="sm" fw={600}>
-							GL Features
-						</Text>
-					}
-					labelPosition="center"
-				/>
-
-				<GlFeatureSwitch
-					label={settings.dialogSolverEnabled ? "Dialog Solver On" : "Dialog Solver Off"}
-					checked={settings.dialogSolverEnabled}
-					onChange={(checked) => updateSetting("dialogSolverEnabled", checked)}
-					info="Highlights dialog options during quest conversations. Light resource usage."
-					textColor={hasTextColor ? settings.textColor : undefined}
-				/>
-
-				<GlFeatureSwitch
-					label={settings.compassOverlayEnabled ? "NPC Compass On" : "NPC Compass Off"}
-					checked={settings.compassOverlayEnabled}
-					onChange={(checked) => updateSetting("compassOverlayEnabled", checked)}
-					info="Shows a 3D compass rose above quest NPCs. Light resource usage."
-					textColor={hasTextColor ? settings.textColor : undefined}
-				/>
-
-				<GlFeatureSwitch
-					label={settings.wanderRadiusEnabled ? "NPC Wander Radius On" : "NPC Wander Radius Off"}
-					checked={settings.wanderRadiusEnabled}
-					onChange={(checked) => updateSetting("wanderRadiusEnabled", checked)}
-					info="Shows a shaded area around quest NPCs indicating their wander range. Light resource usage."
-					textColor={hasTextColor ? settings.textColor : undefined}
-				/>
-
-				<GlFeatureSwitch
-					label={settings.stepOverlayEnabled ? "Step Overlay On" : "Step Overlay Off"}
-					checked={settings.stepOverlayEnabled}
-					onChange={(checked) => updateSetting("stepOverlayEnabled", checked)}
-					info="Displays current quest step text on the game screen. Light resource usage."
-					textColor={hasTextColor ? settings.textColor : undefined}
-				/>
-
-				<GlFeatureSwitch
-					label={settings.inventoryTrackingEnabled ? "Inventory Tracking On" : "Inventory Tracking Off"}
-					checked={settings.inventoryTrackingEnabled}
-					onChange={(checked) => {
-						updateSetting("inventoryTrackingEnabled", checked);
-						(async () => {
-							try {
-								const { getOrCreateTooltipLearner } = require("../../integration");
-								const learner = await getOrCreateTooltipLearner();
-								if (learner) {
-									if (checked) {
-										learner.startPolling(1000);
-										console.log('[Settings] Inventory tracking started');
-									} else {
-										learner.stopPolling();
-										console.log('[Settings] Inventory tracking stopped');
-									}
-								}
-							} catch (e) {
-								console.warn('[Settings] Could not start inventory tracking:', e);
+				{/* GL Features Section — only visible inside Alt1 or Alt1GL */}
+				{showGlSettings && (
+					<>
+						<Divider
+							my="sm"
+							label={
+								<Text size="sm" fw={600}>
+									GL Features
+								</Text>
 							}
-						})();
-					}}
-					info="Passively learns item names by detecting tooltips when hovering inventory items. Requires mouse calibration. Light resource usage."
-					textColor={hasTextColor ? settings.textColor : undefined}
-				/>
+							labelPosition="center"
+						/>
 
-				<GlFeatureSwitch
-					label={settings.autoAdvanceEnabled ? "Auto-Advance On" : "Auto-Advance Off"}
-					checked={settings.autoAdvanceEnabled}
-					onChange={(checked) => updateSetting("autoAdvanceEnabled", checked)}
-					info="Automatically advances to the next quest step when completion conditions are met (dialog, location, or items). Requires quest steps to have completion conditions defined."
-					textColor={hasTextColor ? settings.textColor : undefined}
-				/>
+						<GlFeatureSwitch
+							label={settings.dialogSolverEnabled ? "Dialog Solver On" : "Dialog Solver Off"}
+							checked={settings.dialogSolverEnabled}
+							onChange={(checked) => updateSetting("dialogSolverEnabled", checked)}
+							info="Highlights dialog options during quest conversations. Light resource usage."
+							textColor={hasTextColor ? settings.textColor : undefined}
+						/>
+
+						<GlFeatureSwitch
+							label={settings.compassOverlayEnabled ? "NPC Compass On" : "NPC Compass Off"}
+							checked={settings.compassOverlayEnabled}
+							onChange={(checked) => updateSetting("compassOverlayEnabled", checked)}
+							info="Shows a 3D compass rose above quest NPCs. Light resource usage."
+							textColor={hasTextColor ? settings.textColor : undefined}
+						/>
+
+						<GlFeatureSwitch
+							label={settings.wanderRadiusEnabled ? "NPC Wander Radius On" : "NPC Wander Radius Off"}
+							checked={settings.wanderRadiusEnabled}
+							onChange={(checked) => updateSetting("wanderRadiusEnabled", checked)}
+							info="Shows a shaded area around quest NPCs indicating their wander range. Light resource usage."
+							textColor={hasTextColor ? settings.textColor : undefined}
+						/>
+
+						<GlFeatureSwitch
+							label={settings.stepOverlayEnabled ? "Step Overlay On" : "Step Overlay Off"}
+							checked={settings.stepOverlayEnabled}
+							onChange={(checked) => updateSetting("stepOverlayEnabled", checked)}
+							info="Displays current quest step text on the game screen. Light resource usage."
+							textColor={hasTextColor ? settings.textColor : undefined}
+						/>
+
+						<GlFeatureSwitch
+							label={settings.inventoryTrackingEnabled ? "Inventory Tracking On" : "Inventory Tracking Off"}
+							checked={settings.inventoryTrackingEnabled}
+							onChange={(checked) => {
+								updateSetting("inventoryTrackingEnabled", checked);
+								(async () => {
+									try {
+										const { getOrCreateTooltipLearner } = require("../../integration");
+										const learner = await getOrCreateTooltipLearner();
+										if (learner) {
+											if (checked) {
+												learner.startPolling(1000);
+												console.log('[Settings] Inventory tracking started');
+											} else {
+												learner.stopPolling();
+												console.log('[Settings] Inventory tracking stopped');
+											}
+										}
+									} catch (e) {
+										console.warn('[Settings] Could not start inventory tracking:', e);
+									}
+								})();
+							}}
+							info="Passively learns item names by detecting tooltips when hovering inventory items. Requires mouse calibration. Light resource usage."
+							textColor={hasTextColor ? settings.textColor : undefined}
+						/>
+
+						<GlFeatureSwitch
+							label={settings.autoAdvanceEnabled ? "Auto-Advance On" : "Auto-Advance Off"}
+							checked={settings.autoAdvanceEnabled}
+							onChange={(checked) => updateSetting("autoAdvanceEnabled", checked)}
+							info="Automatically advances to the next quest step when completion conditions are met (dialog, location, or items). Requires quest steps to have completion conditions defined."
+							textColor={hasTextColor ? settings.textColor : undefined}
+						/>
+					</>
+				)}
 			</Stack>
 
 			<Button
@@ -322,57 +327,61 @@ const Settings: React.FC = () => {
 					</AccordionPanel>
 				</Accordion.Item>
 
-				{/* GL Position Settings */}
-				<Accordion.Item key="step-overlay-position" value="Step Overlay Position">
-					<AccordionControl
-						styles={{ control: { color: hasLabelColor ? settings.labelColor : "" } }}
-					>
-						Step Overlay Settings
-					</AccordionControl>
-					<AccordionPanel>
-						<Stack gap="md">
-							<div>
-								<Text size="sm" mb="xs">Font Size: {settings.stepOverlayFontSize}pt</Text>
-								<Slider
-									value={settings.stepOverlayFontSize}
-									onChange={(value) => updateSetting("stepOverlayFontSize", value)}
-									min={14}
-									max={22}
-									step={1}
-									marks={[
-										{ value: 14, label: "14" },
-										{ value: 18, label: "18" },
-										{ value: 22, label: "22" },
-									]}
-								/>
-							</div>
-							<Divider />
-							<StepOverlayPositionEditor
-								positionX={settings.stepOverlayX}
-								positionY={settings.stepOverlayY}
-								onPositionChange={(x, y) => {
-									updateSetting("stepOverlayX", x);
-									updateSetting("stepOverlayY", y);
-								}}
-								screenWidth={uiResolution.width}
-								screenHeight={uiResolution.height}
-							/>
-						</Stack>
-					</AccordionPanel>
-				</Accordion.Item>
+				{/* GL Position Settings — only visible inside Alt1 or Alt1GL */}
+				{showGlSettings && (
+					<>
+						<Accordion.Item key="step-overlay-position" value="Step Overlay Position">
+							<AccordionControl
+								styles={{ control: { color: hasLabelColor ? settings.labelColor : "" } }}
+							>
+								Step Overlay Settings
+							</AccordionControl>
+							<AccordionPanel>
+								<Stack gap="md">
+									<div>
+										<Text size="sm" mb="xs">Font Size: {settings.stepOverlayFontSize}pt</Text>
+										<Slider
+											value={settings.stepOverlayFontSize}
+											onChange={(value) => updateSetting("stepOverlayFontSize", value)}
+											min={14}
+											max={22}
+											step={1}
+											marks={[
+												{ value: 14, label: "14" },
+												{ value: 18, label: "18" },
+												{ value: 22, label: "22" },
+											]}
+										/>
+									</div>
+									<Divider />
+									<StepOverlayPositionEditor
+										positionX={settings.stepOverlayX}
+										positionY={settings.stepOverlayY}
+										onPositionChange={(x, y) => {
+											updateSetting("stepOverlayX", x);
+											updateSetting("stepOverlayY", y);
+										}}
+										screenWidth={uiResolution.width}
+										screenHeight={uiResolution.height}
+									/>
+								</Stack>
+							</AccordionPanel>
+						</Accordion.Item>
 
-				{/* Inventory Mouse Calibration — only available via alt1gl launcher */}
-				{isGlInjectionAvailable() && (
-					<Accordion.Item key="inventory-calibration" value="Inventory Calibration">
-						<AccordionControl
-							styles={{ control: { color: hasLabelColor ? settings.labelColor : "" } }}
-						>
-							Inventory Mouse Calibration
-						</AccordionControl>
-						<AccordionPanel>
-							<InventoryCalibration />
-						</AccordionPanel>
-					</Accordion.Item>
+						{/* Inventory Mouse Calibration — only available via alt1gl launcher */}
+						{isGlInjectionAvailable() && (
+							<Accordion.Item key="inventory-calibration" value="Inventory Calibration">
+								<AccordionControl
+									styles={{ control: { color: hasLabelColor ? settings.labelColor : "" } }}
+								>
+									Inventory Mouse Calibration
+								</AccordionControl>
+								<AccordionPanel>
+									<InventoryCalibration />
+								</AccordionPanel>
+							</Accordion.Item>
+						)}
+					</>
 				)}
 			</Accordion>
 		</div>

@@ -189,21 +189,21 @@ export const useWebSocketVersionCheck = (
 					fallbackTimerRef.current = null;
 				}
 
-				// Preload all collision tiles on first connect if not already cached
-				isCollisionCacheComplete().then((isComplete) => {
-					if (!isComplete) {
-						console.log("[WebSocket] Starting collision data preload...");
-						preloadAllCollisionTiles((loaded, total, errors) => {
-							if (loaded % 10 === 0 || loaded === total) {
-								console.log(`[WebSocket] Collision preload: ${loaded}/${total} (${errors} errors)`);
-							}
-						}).then((result) => {
-							console.log(`[WebSocket] Collision preload finished: ${result.loaded} loaded, ${result.errors} errors`);
-						});
-					} else {
-						console.log("[WebSocket] Collision cache already complete");
-					}
-				});
+				// TODO: Re-enable collision preload when ready
+				// isCollisionCacheComplete().then((isComplete) => {
+				// 	if (!isComplete) {
+				// 		console.log("[WebSocket] Starting collision data preload...");
+				// 		preloadAllCollisionTiles((loaded, total, errors) => {
+				// 			if (loaded % 10 === 0 || loaded === total) {
+				// 				console.log(`[WebSocket] Collision preload: ${loaded}/${total} (${errors} errors)`);
+				// 			}
+				// 		}).then((result) => {
+				// 			console.log(`[WebSocket] Collision preload finished: ${result.loaded} loaded, ${result.errors} errors`);
+				// 		});
+				// 	} else {
+				// 		console.log("[WebSocket] Collision cache already complete");
+				// 	}
+				// });
 			});
 
 			socket.on("disconnect", () => {
