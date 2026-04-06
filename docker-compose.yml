@@ -1,16 +1,17 @@
-services:
-  app:
-    build:
-      context: .
-      target: web
-    image: rs3-quest-buddy:web_beta
-    container_name: rs3questbuddy_beta_app
-    restart: unless-stopped
-    environment:
-      PORT: "8080"
-      NODE_ENV: "production"
-    depends_on:
-      rs3questbuddy-db:
-        condition: service_healthy
-    networks:
-      - app_net
+  services:
+    app:
+      build:
+        context: .
+        target: web
+      image: rs3-quest-buddy:web_beta
+      container_name: rs3questbuddybeta
+      restart: unless-stopped
+      environment:
+        PORT: "8080"
+        NODE_ENV: "production"
+      networks:
+        - app_net
+
+  networks:
+    app_net:
+      external: true
