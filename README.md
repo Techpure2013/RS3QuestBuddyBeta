@@ -9,15 +9,10 @@ A next-generation quest companion overlay for RuneScape 3 that runs through the 
 
 ### GL Beta Exclusive Features
 
-- **Real-time Game UI Reading** - WebGL render interception via native addon enables instant access to rendered game data
 - **Compass Rose Overlay** - Visual direction indicators on the in-game compass pointing to quest objectives
 - **Minimap Direction Arrows & Markers** - Quest waypoints and navigation hints rendered directly on the minimap
-- **HUD Compass Overlay** - Dedicated compass element showing quest objective locations in real-time
 - **Quest Step Text Overlay** - Current quest step displayed directly on screen for easy reference
-- **Path Tube Overlay** - 3D pathfinding visualization showing the recommended route to objectives
-- **Collision Overlay** - Visual representation of walkable and blocked tiles in the game world
 - **Dialog Solver** - Automatic detection and tracking of in-game dialog options
-- **Inventory Tracking** - Real-time item detection using tooltip learning and perceptual hashing (pHash)
 - **Player Position Tracking** - Determines player location by analyzing the rendered 3D scene
 - **Auto-advance Quest Steps** - Automatically progress quests based on dialog, location, or inventory conditions
 - **Sprite Identification System** - CRC32 and pHash-based sprite matching for UI element detection
@@ -43,7 +38,6 @@ A next-generation quest companion overlay for RuneScape 3 that runs through the 
 | **State Management** | Zustand |
 | **Real-time Communication** | Socket.IO |
 | **Game Integration** | Alt1 Toolkit API, Alt1 Launcher API |
-| **GPU Interception** | patchrs (native addon) |
 | **Build Tool** | Webpack 5 |
 | **Styling** | SCSS, PostCSS |
 
@@ -52,7 +46,7 @@ A next-generation quest companion overlay for RuneScape 3 that runs through the 
 ### Prerequisites
 
 - Node.js 18 or later
-- Alt1GL-Launcher (custom launcher with GL injection capabilities)
+- RS3-Launcher-Buddy (custom launcher with GL injection capabilities)
 - RuneScape 3 client
 - Git (for cloning the repository)
 
@@ -75,8 +69,8 @@ A next-generation quest companion overlay for RuneScape 3 that runs through the 
    ```
    The application will be available at `http://localhost:3001`
 
-4. Add to Alt1GL-Launcher
-   - Open Alt1GL-Launcher
+4. Add to RS3-Launcher-Buddy
+   - Open RS3-Launcher-Buddy
    - Click "Add App"
    - Enter `http://localhost:3001` as the app URL
    - Start the app from the launcher
@@ -118,19 +112,13 @@ src/
 
 ### Key Components
 
-#### GL Injection System (`src/gl/injection/`)
-The native addon (`patchrs`) intercepts WebGL render calls, allowing the application to:
-- Read rendered sprite data from the game's UI atlases
-- Extract tile and NPC position information from 3D scene rendering
-- Monitor dialog box state and button positions
-
 #### Quest Engine (`src/integration/engine/`)
 Handles automatic quest progression through:
 - Dialog option detection and clicking
 - Location-based objective completion
 - Inventory-based quest step advancement
 
-#### Inventory Monitoring (`src/integration/`)
+#### Inventory Monitoring
 Real-time item tracking using:
 - Tooltip learning system for item identification
 - Perceptual hashing (pHash) for robust matching
@@ -163,75 +151,30 @@ Access settings in the Settings page after launching the application.
 ### GL Overlay Usage
 
 GL overlays require:
-- Application loaded through Alt1GL-Launcher
+- Application loaded through RS3-Launcher-Buddy
 - GL injection enabled in settings
 - RuneScape 3 game window visible
 
 Each overlay can be independently positioned using the overlay position editors in Settings.
 
-## Troubleshooting
-
-### GL Features Not Working
-
-- Ensure Alt1GL-Launcher is being used, not a standard browser
-- Check that GL injection is enabled in Settings
-- Verify the native addon has been built (`build/Release/addon.node` exists)
-- Restart the Alt1GL-Launcher if overlays appear blank
-
-### Settings Not Persisting
-
-- Check browser console for localStorage quota errors
-- Clear browser cache and reload
-- Verify browser localStorage is enabled
-
-### Performance Issues
-
-- Disable collision overlay if FPS drops significantly
-- Reduce path tube resolution in settings
-- Close other overlay-heavy apps running in Alt1GL-Launcher
-
-## Build & Distribution
-
-### Production Build
-
-```bash
-npm run build
-```
-
-This creates:
-- Optimized webpack bundle in `dist/`
-- Automatic version update in manifest
-- Ready for deployment or Alt1 distribution
-
-### Building the Native Addon
-
-The native addon (`patchrs`) must be built separately:
-
-```bash
-# From the project root
-npm run build:native
-```
-
-Requires Visual Studio Build Tools or equivalent C++ compiler.
-
 ## Browser Support
 
-- Alt1GL-Launcher (Chromium-based)
+- RS3-Launcher-Buddy (Chromium-based)
 - Modern Chromium/Chrome browsers
 - WebGL 2.0 support required
 
-Standard browser features (quest guides) work in any modern browser, but GL overlays require Alt1GL-Launcher with its GL injection capabilities.
+Standard browser features (quest guides) work in any modern browser, but GL overlays require RS3-Launcher-Buddy with its GL injection capabilities.
 
 ## Known Limitations
 
-- GL features only available when loaded through Alt1GL-Launcher
+- GL features only available when loaded through RS3-Launcher-Buddy
 - Path visualization quality depends on game render resolution
 - Inventory tracking limited to detectable item tooltips
 - Dialog solver works best with standard RS3 UI settings
 
 ## Contributing
 
-This is a beta release. Please report bugs and suggestions via the project homepage.
+This is a beta release. Please report bugs and suggestions via the discord.
 
 ## License
 
@@ -240,9 +183,5 @@ See LICENSE file in repository root.
 ## Links
 
 - **Homepage** - https://techpure.dev/RS3QuestBuddyBeta
-- **Alt1 Toolkit** - https://alt1.app (reference - this project uses a custom launcher)
+- **Alt1 Toolkit** - https://runeapps.org(reference - this project uses a custom launcher and is not alt1)
 - **RuneScape 3** - https://www.runescape.com
-
-## Acknowledgments
-
-Built with the Alt1 Toolkit API as a library dependency, running through the custom Alt1GL-Launcher which provides GL injection capabilities. The standard Alt1 Toolkit cannot run this app - it requires the GL-Launcher specifically for WebGL interception via the patchrs native addon. Sprite identification and inventory tracking systems use advanced image processing techniques for reliable game state detection.
