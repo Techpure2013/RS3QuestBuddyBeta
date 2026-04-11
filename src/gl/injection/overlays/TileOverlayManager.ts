@@ -872,7 +872,8 @@ async function createMarkerOverlay(marker: RectMarker, floorInfo: CachedChunkFlo
         return vertexindex++;
     };
 
-    // EXACT copy of tilemarkers.ts writeline function
+    // Based on tilemarkers.ts writeline function
+    // Double-sided: both CCW and CW winding to prevent backface culling at certain camera angles
     const writeline = (x: number, z: number, size: number, vertcol: number[], leftcut: boolean, rightcut: boolean, dir: number): void => {
         const diagcut = 0.2;
         const left = leftcut ? -diagcut : -0.5;
@@ -883,12 +884,16 @@ async function createMarkerOverlay(marker: RectMarker, floorInfo: CachedChunkFlo
         const v2 = writevertex(x, z, right - size, -0.5 + size, 0, vertcol, dir);
         const v3 = writevertex(x, z, left + size, -0.5 + size, 0, vertcol, dir);
 
-        // EXACT index order from tilemarkers.ts (counterclockwise winding)
+        // Front faces (CCW)
         indices.push(v0, v2, v1);
         indices.push(v0, v3, v2);
+        // Back faces (CW) - double-sided rendering
+        indices.push(v0, v1, v2);
+        indices.push(v0, v2, v3);
     };
 
     // Write a solid filled quad (2 triangles covering the entire tile)
+    // Double-sided: both CCW and CW winding to prevent backface culling at certain camera angles
     const writeSolidTile = (x: number, z: number, vertcol: number[]): void => {
         // 4 corners of the tile, small height offset to render above terrain
         const heightOffset = 2 / 32;
@@ -897,9 +902,12 @@ async function createMarkerOverlay(marker: RectMarker, floorInfo: CachedChunkFlo
         const v2 = writevertex(x, z, 0.5, 0.5, heightOffset, vertcol, 0);   // NE
         const v3 = writevertex(x, z, -0.5, 0.5, heightOffset, vertcol, 0);  // NW
 
-        // Two triangles to fill the quad (counterclockwise winding)
-        indices.push(v0, v2, v1); // SE triangle
-        indices.push(v0, v3, v2); // NW triangle
+        // Front faces (CCW)
+        indices.push(v0, v2, v1);
+        indices.push(v0, v3, v2);
+        // Back faces (CW) - double-sided rendering
+        indices.push(v0, v1, v2);
+        indices.push(v0, v2, v3);
     };
 
     // Convert marker lat/lng to INTEGER tile coordinates within chunk
@@ -1011,7 +1019,8 @@ async function createMarkerOverlay(marker: RectMarker, floorInfo: CachedChunkFlo
             {
                 uniformSources: uniformSources,
                 uniformBuffer: new Uint8Array(uniforms.buffer.buffer),
-                ranges: renderRanges
+                ranges: renderRanges,
+                alphaBlend: true
             }
         );
     } catch (e) {
@@ -1339,31 +1348,42 @@ async function createObjectTilesBatchedOverlay(
     };
 
     // Write solid filled tile (lowest layer)
+    // Double-sided: both CCW and CW winding to prevent backface culling at certain camera angles
     const writeSolidTile = (x: number, z: number, vertcol: number[]): void => {
         const heightOffset = 2 / 32;
         const v0 = writevertex(x, z, -0.5, -0.5, heightOffset, vertcol, 0);
         const v1 = writevertex(x, z, 0.5, -0.5, heightOffset, vertcol, 0);
         const v2 = writevertex(x, z, 0.5, 0.5, heightOffset, vertcol, 0);
         const v3 = writevertex(x, z, -0.5, 0.5, heightOffset, vertcol, 0);
+        // Front faces (CCW)
         indices.push(v0, v2, v1);
         indices.push(v0, v3, v2);
+        // Back faces (CW) - double-sided rendering
+        indices.push(v0, v1, v2);
+        indices.push(v0, v2, v3);
     };
 
     // Border colors - dark casing for contrast
     const blackCasing = [0, 0, 0, 200];
 
     // Writeline for border casing (dark outline) - middle layer
+    // Double-sided: both CCW and CW winding to prevent backface culling at certain camera angles
     const writeBorderCasing = (x: number, z: number, size: number, dir: number): void => {
         const heightOffset = 3 / 32; // Above fill
         const v0 = writevertex(x, z, -0.5, -0.5, heightOffset, blackCasing, dir);
         const v1 = writevertex(x, z, 0.5, -0.5, heightOffset, blackCasing, dir);
         const v2 = writevertex(x, z, 0.5 - size, -0.5 + size, heightOffset, blackCasing, dir);
         const v3 = writevertex(x, z, -0.5 + size, -0.5 + size, heightOffset, blackCasing, dir);
+        // Front faces (CCW)
         indices.push(v0, v2, v1);
         indices.push(v0, v3, v2);
+        // Back faces (CW) - double-sided rendering
+        indices.push(v0, v1, v2);
+        indices.push(v0, v2, v3);
     };
 
     // Writeline for colored border inline - top layer
+    // Double-sided: both CCW and CW winding to prevent backface culling at certain camera angles
     const writeBorderInline = (x: number, z: number, size: number, vertcol: number[], dir: number): void => {
         const heightOffset = 4 / 32; // Above casing
         const inset = size * 0.3; // Smaller than casing
@@ -1371,8 +1391,12 @@ async function createObjectTilesBatchedOverlay(
         const v1 = writevertex(x, z, 0.5 - inset, -0.5, heightOffset, vertcol, dir);
         const v2 = writevertex(x, z, 0.5 - size, -0.5 + size - inset, heightOffset, vertcol, dir);
         const v3 = writevertex(x, z, -0.5 + size, -0.5 + size - inset, heightOffset, vertcol, dir);
+        // Front faces (CCW)
         indices.push(v0, v2, v1);
         indices.push(v0, v3, v2);
+        // Back faces (CW) - double-sided rendering
+        indices.push(v0, v1, v2);
+        indices.push(v0, v2, v3);
     };
 
     // Process each tile
@@ -1465,7 +1489,8 @@ async function createObjectTilesBatchedOverlay(
         {
             uniformSources: uniformSources,
             uniformBuffer: new Uint8Array(uniforms.buffer.buffer),
-            ranges: renderRanges
+            ranges: renderRanges,
+            alphaBlend: true
         }
     );
 
