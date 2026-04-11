@@ -5,11 +5,27 @@ interface UseStepHotkeysOptions {
   onNextStep: () => void;
   onPrevStep: () => void;
   enabled?: boolean;
+  /** Alt1 accelerator string for next step (e.g. "Shift+.") */
+  nextStepHotkey?: string;
+  /** Alt1 accelerator string for previous step (e.g. "Shift+,") */
+  prevStepHotkey?: string;
 }
 
-export function useStepHotkeys({ onNextStep, onPrevStep, enabled = true }: UseStepHotkeysOptions) {
+export function useStepHotkeys({
+  onNextStep,
+  onPrevStep,
+  enabled = true,
+  nextStepHotkey = 'Shift+.',
+  prevStepHotkey = 'Shift+,',
+}: UseStepHotkeysOptions) {
   // Track registered hotkey IDs for cleanup
   const hotkeyIdsRef = useRef<number[]>([]);
+
+  // Stabilize callbacks via refs to prevent re-registering on every render
+  const onNextStepRef = useRef(onNextStep);
+  onNextStepRef.current = onNextStep;
+  const onPrevStepRef = useRef(onPrevStep);
+  onPrevStepRef.current = onPrevStep;
 
   useEffect(() => {
     if (!enabled || !isAlt1GL()) {
@@ -24,21 +40,21 @@ export function useStepHotkeys({ onNextStep, onPrevStep, enabled = true }: UseSt
 
     const registerHotkeys = async () => {
       try {
-        // Register Shift+, for previous step (<) using accelerator string
+        // Register previous step hotkey using user-configured accelerator
         const prevId = await hotkeys.registerAccelerator(
-          'Shift+,',
+          prevStepHotkey,
           'quest-step-prev',
           () => {
-            onPrevStep();
+            onPrevStepRef.current();
           }
         );
 
-        // Register Shift+. for next step (>) using accelerator string
+        // Register next step hotkey using user-configured accelerator
         const nextId = await hotkeys.registerAccelerator(
-          'Shift+.',
+          nextStepHotkey,
           'quest-step-next',
           () => {
-            onNextStep();
+            onNextStepRef.current();
           }
         );
 
@@ -60,5 +76,5 @@ export function useStepHotkeys({ onNextStep, onPrevStep, enabled = true }: UseSt
         hotkeyIdsRef.current = [];
       }
     };
-  }, [enabled, onNextStep, onPrevStep]);
+  }, [enabled, nextStepHotkey, prevStepHotkey]);
 }

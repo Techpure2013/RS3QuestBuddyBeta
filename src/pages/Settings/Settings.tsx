@@ -9,6 +9,7 @@ import {
 	Stack,
 	Switch,
 	Text,
+	TextInput,
 	Tooltip,
 	Divider,
 } from "@mantine/core";
@@ -220,6 +221,32 @@ const Settings: React.FC = () => {
 							info="Automatically advances to the next quest step when completion conditions are met (dialog, location, or items). Requires quest steps to have completion conditions defined."
 							textColor={hasTextColor ? settings.textColor : undefined}
 						/>
+
+						<Divider my="xs" />
+						<Text size="sm" fw={500} c={hasTextColor ? settings.textColor : undefined}>
+							Step Navigation Hotkeys
+						</Text>
+						<Group grow gap="sm">
+							<TextInput
+								label="Next Step"
+								value={settings.nextStepHotkey}
+								onChange={(e) => updateSetting("nextStepHotkey", e.currentTarget.value)}
+								placeholder="Shift+."
+								size="xs"
+								styles={{ label: { color: hasLabelColor ? settings.labelColor : "" } }}
+							/>
+							<TextInput
+								label="Previous Step"
+								value={settings.prevStepHotkey}
+								onChange={(e) => updateSetting("prevStepHotkey", e.currentTarget.value)}
+								placeholder="Shift+,"
+								size="xs"
+								styles={{ label: { color: hasLabelColor ? settings.labelColor : "" } }}
+							/>
+						</Group>
+						<Text size="xs" c="dimmed">
+							Alt1 accelerator format (e.g. Shift+., Alt+Right, Ctrl+Shift+N)
+						</Text>
 					</>
 				)}
 			</Stack>

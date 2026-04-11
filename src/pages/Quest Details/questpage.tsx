@@ -458,11 +458,13 @@ const QuestPage: React.FC = () => {
 		}
 	};
 
-	// Register hotkeys for step navigation (< and > keys)
+	// Register hotkeys for step navigation (configurable in settings)
 	useStepHotkeys({
 		onNextStep: scrollNext,
 		onPrevStep: scrollPrev,
 		enabled: !showStepReq, // Only enable when viewing steps, not quest details
+		nextStepHotkey: settings.nextStepHotkey,
+		prevStepHotkey: settings.prevStepHotkey,
 	});
 
 	useAlt1Listener(scrollNext);

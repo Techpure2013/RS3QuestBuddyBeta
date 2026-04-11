@@ -25,6 +25,9 @@ export interface SettingsState {
 	hudCompassY: number;
 	inventoryTrackingEnabled: boolean;
 	autoAdvanceEnabled: boolean;
+	// Hotkeys (Alt1 accelerator strings, e.g. "Shift+.", "Alt+Right")
+	nextStepHotkey: string;
+	prevStepHotkey: string;
 	// UI Settings
 	toolTipsEnabled: boolean;
 	autoScrollEnabled: boolean;
@@ -62,6 +65,8 @@ const defaultSettings: SettingsState = {
 	hudCompassY: 900,
 	inventoryTrackingEnabled: false,
 	autoAdvanceEnabled: false,
+	nextStepHotkey: "Shift+.",
+	prevStepHotkey: "Shift+,",
 	// UI Settings
 	toolTipsEnabled: true,
 	richTextEnabled: true,
