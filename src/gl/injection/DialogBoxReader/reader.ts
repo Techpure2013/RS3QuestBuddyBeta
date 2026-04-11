@@ -375,6 +375,13 @@ export class DialogBoxReader {
   }
 
   /**
+   * Remove all detection callbacks
+   */
+  clearCallbacks(): void {
+    this.callbacks.length = 0;
+  }
+
+  /**
    * Start continuous monitoring for dialogs using streamRenderCalls
    * Uses renderStream from util.ts to properly handle 4K UI scaling
    */

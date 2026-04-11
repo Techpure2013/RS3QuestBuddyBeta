@@ -56,6 +56,14 @@ export function useGlQuestIntegration(
 	const currentStepIndexRef = useRef<number>(-1);
 	const currentStepRef = useRef<QuestStep | null>(null);
 
+	// Stabilize onDialogCompleted via ref to prevent cascading re-renders.
+	// Without this, the inline arrow function from questpage creates a new reference
+	// every render, which invalidates handleDialogDetection → startDialogDetection →
+	// the effect that starts/stops the stream, causing an infinite stop/start cycle
+	// where the dialog reader never processes any frames.
+	const onDialogCompletedRef = useRef(onDialogCompleted);
+	onDialogCompletedRef.current = onDialogCompleted;
+
 	// Track when GL systems are fully initialized
 	const [isGlReady, setIsGlReady] = useState(false);
 
@@ -178,7 +186,7 @@ export function useGlQuestIntegration(
 							waitingForReleaseRef.current = true;
 							lastPressedButtonRef.current = { text: lastBtn.text, x: lastBtn.x, y: lastBtn.y, timestamp: Date.now() };
 							completedDialogCountsRef.current.set(lastBtn.text, currentCount + 1);
-							onDialogCompleted?.();
+							onDialogCompletedRef.current?.();
 						}
 					}
 
@@ -274,7 +282,7 @@ export function useGlQuestIntegration(
 					await spriteOverlayRef.current?.stop(dialogOverlayHandleRef.current);
 					dialogOverlayHandleRef.current = null;
 					lastHighlightedButtonRef.current = null;
-					onDialogCompleted?.();
+					onDialogCompletedRef.current?.();
 				}
 				return;
 			}
@@ -285,7 +293,7 @@ export function useGlQuestIntegration(
 				await spriteOverlayRef.current?.stop(dialogOverlayHandleRef.current);
 				dialogOverlayHandleRef.current = null;
 				lastHighlightedButtonRef.current = null;
-				onDialogCompleted?.();
+				onDialogCompletedRef.current?.();
 			}
 		}
 
@@ -337,7 +345,7 @@ export function useGlQuestIntegration(
 
 		// No match found - but don't clear overlay immediately
 		// The dialog is present but no matching option, keep existing highlight if any
-	}, [onDialogCompleted]);
+	}, []); // Stable: onDialogCompleted accessed via ref to prevent re-render cascade
 
 	// Highlight a dialog button with overlay
 	const highlightButton = async (btn: any) => {
@@ -454,7 +462,8 @@ export function useGlQuestIntegration(
 			dialogReaderRef.current.stop();
 		}
 
-		// Register callback and start streaming
+		// Clear previous callbacks to prevent accumulation, then register fresh
+		dialogReaderRef.current.clearCallbacks();
 		dialogReaderRef.current.onDetect(handleDialogDetection);
 		dialogReaderRef.current.start();
 	}, [handleDialogDetection, dialogSolverEnabled]);

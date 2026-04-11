@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { Routes, Route, BrowserRouter, Navigate, Outlet } from "react-router-dom";
+import { Badge } from "@mantine/core";
 import QuestCarousel from "./../pages/Quest Picker/QuestCarousel";
 import QuestPage from "./../pages/Quest Details/questpage";
 import { SettingsProvider } from "./Entrance Components/SettingsContext";
@@ -94,6 +95,20 @@ function App() {
 				<AppWithVersionCheck>
 					<SettingsProvider>
 						<BrowserRouter basename={isDev ? "/" : "/RS3QuestBuddyBeta"}>
+							<Badge
+								color="orange"
+								variant="filled"
+								size="lg"
+								style={{
+									position: "fixed",
+									top: 8,
+									right: 8,
+									zIndex: 1000,
+									pointerEvents: "none",
+								}}
+							>
+								BETA
+							</Badge>
 							<Routes>
 								<Route path="/" element={<QuestCarousel />} />
 								<Route path="/:questName" element={<QuestPage />} />
