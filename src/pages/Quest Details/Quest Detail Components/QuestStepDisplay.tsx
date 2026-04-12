@@ -360,6 +360,8 @@ export const CompactQuestStep: React.FC<CompactQuestStepProps> = ({
 									</div>
 								);
 							})}
+						{/* Only show map icon for unmapped steps (no NPC or object highlights) */}
+						{(!step.highlights || (step.highlights.npc.length === 0 && step.highlights.object.length === 0)) && (
 						<div onClick={(e) => e.stopPropagation()}>
 							<ActionIcon
 								component="div"
@@ -375,6 +377,7 @@ export const CompactQuestStep: React.FC<CompactQuestStepProps> = ({
 								<IconMap2 size={18} />
 							</ActionIcon>
 						</div>
+						)}
 					</Group>
 				</Flex>
 			</Accordion.Control>

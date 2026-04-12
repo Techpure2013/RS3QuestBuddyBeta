@@ -89,6 +89,7 @@ let currentPosition: PlayerPositionData | null = null;
 // Support multiple position callbacks (pathfinding, minimap, etc.)
 const positionCallbacks = new Map<string, (position: PlayerPositionData) => void>();
 let transportCallback: ((transport: DetectedTransport) => void) | null = null;
+let floorChangeCallback: ((newFloor: number, oldFloor: number) => void) | null = null;
 let pollingInterval: ReturnType<typeof setInterval> | null = null;
 let lastPreloadPosition: { x: number; y: number; floor: number } | null = null;
 let lastDetectedPosition: { x: number; y: number; floor: number } | null = null; // For teleport detection
@@ -666,10 +667,12 @@ export async function startPlayerTracking(
 						// Check if player arrived at a vertical transport exit (must be within 2 tiles)
 						const transportFloor = checkVerticalTransportArrival(gameX, gameY, trackedFloor);
 						if (transportFloor !== null && transportFloor !== trackedFloor) {
+							const oldFloor = trackedFloor;
 							trackedFloor = transportFloor;
 							floorConfidence = "confirmed";
 							lastFloorChangeTime = now;
 							lastY = pos.y; // Update Y reference
+							try { floorChangeCallback?.(trackedFloor, oldFloor); } catch {}
 						}
 
 						// Y-based floor detection for floor 1+ (when on upper floors, Y drop = went down)
@@ -683,13 +686,27 @@ export async function startPlayerTracking(
 							if (yDelta < -Y_FLOOR_CHANGE_THRESHOLD) {
 								const newFloor = Math.max(0, trackedFloor - 1);
 								if (newFloor !== trackedFloor) {
+									const oldFloor = trackedFloor;
 									trackedFloor = newFloor;
 									floorConfidence = "assumed";
 									lastFloorChangeTime = now;
+									try { floorChangeCallback?.(trackedFloor, oldFloor); } catch {}
 								}
 							}
 							// NOTE: Y increase does NOT trigger floor UP - only transports can do that
 							// Hills can cause Y to increase significantly without changing floors
+						}
+					}
+
+					// Scene change detection: significant Y change indicates ladder/stairs/trapdoor
+					// even when floor tracking can't detect the exact floor change
+					// (e.g. no transport data for this ladder, or going up from floor 0).
+					// Triggers tile overlay recreation to clear stale VAO-attached overlays.
+					if (canChangeFloor && lastY !== 0) {
+						const absYDelta = Math.abs(pos.y - lastY);
+						if (absYDelta > Y_FLOOR_CHANGE_THRESHOLD && lastFloorChangeTime !== now) {
+							lastFloorChangeTime = now;
+							try { floorChangeCallback?.(trackedFloor, trackedFloor); } catch {}
 						}
 					}
 
@@ -701,8 +718,10 @@ export async function startPlayerTracking(
 						// lat = pos.z (north/south), lng = pos.x (east/west)
 						const terrainFloor = await validateFloorWithTerrain(pos.y, pos.z, pos.x, trackedFloor);
 						if (terrainFloor !== null && terrainFloor !== trackedFloor) {
+							const oldFloor = trackedFloor;
 							trackedFloor = terrainFloor;
 							lastFloorChangeTime = now;
+							try { floorChangeCallback?.(trackedFloor, oldFloor); } catch {}
 							// Keep confidence as "assumed" since terrain isn't as reliable as transport
 						}
 					}
@@ -776,6 +795,10 @@ export async function startPlayerTracking(
 								console.error("[PlayerTracker] Teleport callback error:", e);
 							}
 						}
+
+						// Trigger tile overlay recreation after teleport
+						// Scene has settled — new VAOs are in place, stale overlays need replacing
+						try { floorChangeCallback?.(trackedFloor, trackedFloor); } catch {}
 					}
 
 					// Notify all registered callbacks (unless in teleport suppression mode)
@@ -857,6 +880,17 @@ export function setTransportCallback(
 	callback: ((transport: DetectedTransport) => void) | null
 ): void {
 	transportCallback = callback;
+}
+
+/**
+ * Set callback to be notified when the tracked floor changes.
+ * Fires on vertical transport detection, Y-based floor drop, and terrain validation.
+ * Used by QuestOverlayManager to recreate tile overlays after floor transitions.
+ */
+export function setFloorChangeCallback(
+	callback: ((newFloor: number, oldFloor: number) => void) | null
+): void {
+	floorChangeCallback = callback;
 }
 
 /**
@@ -973,6 +1007,7 @@ if (typeof globalThis !== "undefined") {
 		setFloor: setPlayerFloor,
 		clear: clearPlayerPosition,
 		setTransportCallback,
+		setFloorChangeCallback,
 		// Floor tracking state
 		getFloorState: () => ({
 			floor: trackedFloor,

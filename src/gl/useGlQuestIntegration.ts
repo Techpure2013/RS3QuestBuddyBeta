@@ -18,7 +18,9 @@ import {
 	deactivateStepOverlays,
 	isOverlayActive,
 	setWanderRadiusEnabled,
+	onPlayerFloorChanged,
 } from "./QuestOverlayManager";
+import { setFloorChangeCallback } from "./PlayerPositionTracker";
 import { onResolutionChange } from "./UIScaleManager";
 import { DialogBoxReader, DialogBoxResult } from "@injection/DialogBoxReader/reader";
 import { SpriteOverlay } from "@injection/util/spriteOverlay";
@@ -134,7 +136,16 @@ export function useGlQuestIntegration(
 
 		initDialog();
 
+		// Register floor change callback to recreate tile overlays after ladder/stairs
+		setFloorChangeCallback((newFloor, _oldFloor) => {
+			onPlayerFloorChanged(newFloor).catch(e =>
+				console.warn("[GlQuest] Floor change overlay refresh error:", e)
+			);
+		});
+
 		return () => {
+			// Cleanup floor change listener
+			setFloorChangeCallback(null);
 			// Cleanup resolution listener
 			if (resolutionCleanup) {
 				resolutionCleanup();
@@ -488,6 +499,11 @@ export function useGlQuestIntegration(
 			deactivateStepOverlays();
 		};
 	}, []);
+
+	// NOTE: Teleport/floor-change overlay cleanup is intentionally disabled.
+	// The z-fighting issue when teleporting to basements is a DLL-level problem
+	// (stale VAO IDs after teleport). Clearing and recreating overlays from JS
+	// causes frame drops and doesn't solve the underlying VAO matching issue.
 
 	// Re-activate overlays when compassOverlayEnabled changes
 	useEffect(() => {

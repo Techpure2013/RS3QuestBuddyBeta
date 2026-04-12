@@ -2263,12 +2263,28 @@ export function startFloorTracking(): { close: () => void } {
 }
 
 /**
+ * Invalidate ALL caches including floor program ID.
+ * Call after resetOpenGlState() which destroys all DLL-side programs.
+ */
+export function invalidateFloorCache(): void {
+    floorProgramId = null;
+    chunkFloorCache.clear();
+}
+
+/**
+ * Invalidate only chunk VAO cache (floor program survives scene transitions).
+ * Call after floor changes (ladders, teleports) where VAOs change but programs don't.
+ */
+export function invalidateChunkCache(): void {
+    chunkFloorCache.clear();
+}
+
+/**
  * Cleanup
  */
 export function stopFloorTracking(): void {
     clearAllOverlays();
-    floorProgramId = null;
-    chunkFloorCache.clear();
+    invalidateFloorCache();
 }
 
 /**

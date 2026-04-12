@@ -584,52 +584,79 @@ const QuestPage: React.FC = () => {
 			handles.popOutWindow.close();
 			handles.setPopOutWindow(null);
 		} else {
-			const newWindow = window.open(
-				"./emptypage.html",
-				`promptbox_${Date.now()}`,
-				`width=${width + 20},height=${height + 100}`,
-			);
-			if (newWindow) {
-				handles.setPopOutWindow(newWindow);
-				newWindow.document.title = "Quest Image";
-				newWindow.document.writeln(
-					"<html><head><title>Quest Image</title></head><body></body></html>",
+			// Detect Electron — contextIsolation blocks cross-window DOM access,
+			// so use a self-contained HTML page with the image embedded.
+			const isElectron = !!(window as any).alt1gl || !!(window as any)._alt1gl;
+			const bgColor = getComputedStyle(document.body).backgroundColor;
+
+			if (isElectron) {
+				// Resolve relative image URL to absolute before embedding in blob
+				const absoluteSrc = src.startsWith("http") ? src : new URL(src, window.location.href).href;
+				// Build a self-contained HTML blob URL with the image
+				const html = `<!DOCTYPE html><html><head><title>Quest Image</title>
+					<style>body{margin:0;padding:8px;background:${bgColor};display:flex;align-items:center;justify-content:center;min-height:100vh;box-sizing:border-box;}
+					img{max-width:100%;height:auto;}</style></head>
+					<body><img src="${absoluteSrc}" alt="Quest Step" /></body></html>`;
+				const blob = new Blob([html], { type: "text/html" });
+				const blobUrl = URL.createObjectURL(blob);
+				const newWindow = window.open(
+					blobUrl,
+					`promptbox_${Date.now()}`,
+					`width=${width + 20},height=${height + 100}`,
 				);
-				newWindow.document.close();
-
-				const container = newWindow.document.createElement("div");
-				newWindow.document.body.appendChild(container);
-
-				document
-					.querySelectorAll('style, link[rel="stylesheet"]')
-					.forEach((stylesheet) => {
-						copyStyle(newWindow, stylesheet as HTMLStyleElement | HTMLLinkElement);
-					});
-				const emotionStyles = document.querySelectorAll("style[data-emotion]");
-				emotionStyles.forEach((style) => {
-					const s = newWindow.document.createElement("style");
-					s.textContent = style.textContent;
-					newWindow.document.head.appendChild(s);
-				});
-
-				// Transfer theme settings to pop-out window
-				const theme = document.documentElement.getAttribute("data-theme");
-				if (theme) {
-					newWindow.document.documentElement.setAttribute("data-theme", theme);
+				if (newWindow) {
+					handles.setPopOutWindow(newWindow);
+					// Clean up blob URL when window closes
+					newWindow.addEventListener("beforeunload", () => URL.revokeObjectURL(blobUrl));
 				}
-				newWindow.document.body.style.backgroundColor = getComputedStyle(document.body).backgroundColor;
-				newWindow.document.body.style.margin = "0";
-				newWindow.document.body.style.padding = "8px";
-
-				const root = createRoot(container);
-				root.render(
-					<img
-						src={src}
-						style={{ maxWidth: "100%", height: "auto" }}
-						alt="Quest Step"
-						loading="lazy"
-					/>,
+			} else {
+				// Browser mode — use the original cross-window DOM approach
+				const newWindow = window.open(
+					"./emptypage.html",
+					`promptbox_${Date.now()}`,
+					`width=${width + 20},height=${height + 100}`,
 				);
+				if (newWindow) {
+					handles.setPopOutWindow(newWindow);
+					newWindow.document.title = "Quest Image";
+					newWindow.document.writeln(
+						"<html><head><title>Quest Image</title></head><body></body></html>",
+					);
+					newWindow.document.close();
+
+					const container = newWindow.document.createElement("div");
+					newWindow.document.body.appendChild(container);
+
+					document
+						.querySelectorAll('style, link[rel="stylesheet"]')
+						.forEach((stylesheet) => {
+							copyStyle(newWindow, stylesheet as HTMLStyleElement | HTMLLinkElement);
+						});
+					const emotionStyles = document.querySelectorAll("style[data-emotion]");
+					emotionStyles.forEach((style) => {
+						const s = newWindow.document.createElement("style");
+						s.textContent = style.textContent;
+						newWindow.document.head.appendChild(s);
+					});
+
+					const theme = document.documentElement.getAttribute("data-theme");
+					if (theme) {
+						newWindow.document.documentElement.setAttribute("data-theme", theme);
+					}
+					newWindow.document.body.style.backgroundColor = bgColor;
+					newWindow.document.body.style.margin = "0";
+					newWindow.document.body.style.padding = "8px";
+
+					const root = createRoot(container);
+					root.render(
+						<img
+							src={src}
+							style={{ maxWidth: "100%", height: "auto" }}
+							alt="Quest Step"
+							loading="lazy"
+						/>,
+					);
+				}
 			}
 		}
 	};

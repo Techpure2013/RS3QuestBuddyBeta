@@ -64,6 +64,9 @@ const PROXIMITY_SCAN_DISTANCE = 30;
 // In-flight parallel tasks check this to bail out if a newer activation superseded them.
 let activationGeneration = 0;
 
+// Track the player's floor to clear/recreate overlays on floor change
+let lastKnownFloor = -1;
+
 let state: QuestOverlayState = {
 	isActive: false,
 	currentStep: null,
@@ -229,11 +232,8 @@ export async function setWanderRadiusEnabled(enabled: boolean): Promise<void> {
 
 		for (const overlay of wanderOverlays) {
 			if (typeof overlay.id !== "number") {
-				try {
-					overlay.id.stop();
-				} catch (e) {
-					// Ignore errors when stopping
-				}
+				try { overlay.id.stop(); } catch {}
+				try { (overlay.id as any).dispose?.(); } catch {}
 			}
 		}
 
@@ -301,10 +301,17 @@ async function initOverlays(): Promise<boolean> {
 		state.patchrs = await import("@injection/util/patchrs_napi");
 		if (!state.patchrs.native) return false;
 
+		// Clear all DLL-side GL objects (overlays, programs, textures, vertex arrays)
+		// on first init. After a window refresh, JS module state resets but DLL overlays
+		// survive — this prevents stale overlays from stacking with new ones.
+		try { await state.patchrs.native.resetOpenGlState(); } catch {}
+
 		const npcOverlayModule = await import("@injection/NpcOverlay/npcOverlay");
 		state.npcOverlay = new npcOverlayModule.NpcOverlay();
 
 		tileOverlayManager = await import("@injection/overlays/TileOverlayManager");
+		// Invalidate cached floor program/chunk data after resetOpenGlState
+		tileOverlayManager.invalidateFloorCache();
 
 		// Initialize UI scale manager to detect resolution/scaling changes
 		await initUIScaleManager();
@@ -416,7 +423,8 @@ async function highlightNpcByHash(npc: NpcHighlight): Promise<OverlayHandle | nu
 
 						// Stop the arrow overlay if one was created (we want compass rose instead)
 						if (result.handle) {
-							result.handle.stop();
+							try { result.handle.stop(); } catch {}
+							try { (result.handle as any).dispose?.(); } catch {}
 						}
 
 						// Attach compass rose to the NPC's VAO and framebuffer (fb filter avoids shadow pass)
@@ -656,13 +664,10 @@ async function reattachWithNewFramebuffer(overlay: OverlayHandle, newFramebuffer
 	const npc = overlay.npcInfo;
 	const markerId = `npc-${npc.id ?? overlay.npcHash}`;
 
-	// Stop the old overlay
+	// Stop and dispose the old overlay
 	if (overlay.id && typeof overlay.id !== "number") {
-		try {
-			(overlay.id as GlOverlay).stop();
-		} catch (e) {
-			// Ignore stop errors
-		}
+		try { (overlay.id as GlOverlay).stop(); } catch {}
+		try { (overlay.id as any).dispose?.(); } catch {}
 	}
 
 	// Create new overlay with updated framebuffer
@@ -694,13 +699,10 @@ async function switchToStaticOverlay(overlay: OverlayHandle): Promise<void> {
 	const markerId = `npc-${npc.id ?? overlay.npcHash}`;
 	const floor = npc.floor ?? 0;
 
-	// Stop the VAO-attached overlay
+	// Stop and dispose the VAO-attached overlay
 	if (overlay.id && typeof overlay.id !== "number") {
-		try {
-			(overlay.id as GlOverlay).stop();
-		} catch (e) {
-			// Ignore stop errors
-		}
+		try { (overlay.id as GlOverlay).stop(); } catch {}
+		try { (overlay.id as any).dispose?.(); } catch {}
 	}
 
 	// Calculate target location - use center of wander radius if available
@@ -757,11 +759,8 @@ async function tryReattachStaticOverlays(): Promise<void> {
 
 				// Stop the static overlay
 				if (overlay.id && typeof overlay.id !== "number") {
-					try {
-						(overlay.id as GlOverlay).stop();
-					} catch (e) {
-						// Ignore
-					}
+					try { (overlay.id as GlOverlay).stop(); } catch {}
+					try { (overlay.id as any).dispose?.(); } catch {}
 				}
 
 				// Create VAO-attached overlay
@@ -803,12 +802,14 @@ async function tryReattachStaticOverlays(): Promise<void> {
 						// Stop the arrow if created (we want compass rose)
 						if (result.handle) {
 							result.handle.stop();
+							(result.handle as any).dispose?.();
 						}
 
 						// Stop the static overlay
 						if (overlay.id && typeof overlay.id !== "number") {
 							try {
 								(overlay.id as GlOverlay).stop();
+								(overlay.id as any).dispose?.();
 							} catch (e) {
 								// Ignore
 							}
@@ -934,12 +935,14 @@ async function checkPlayerProximityToStaticOverlays(): Promise<void> {
 						// Stop the arrow if created
 						if (result.handle) {
 							result.handle.stop();
+							(result.handle as any).dispose?.();
 						}
 
 						// Stop the static overlay
 						if (overlay.id && typeof overlay.id !== "number") {
 							try {
 								(overlay.id as GlOverlay).stop();
+								(overlay.id as any).dispose?.();
 							} catch (e) {
 								// Ignore
 							}
@@ -1087,13 +1090,18 @@ async function clearOverlays(): Promise<void> {
 		console.warn("[QuestOverlay] Error clearing compass roses:", e);
 	}
 
-	// Clear NPC arrow overlays via .stop() (GlOverlay objects)
+	// Clear NPC arrow overlays via .stop() then .dispose() (GlOverlay objects)
 	for (const overlay of state.activeOverlays) {
 		if (overlay.type === "npc-arrow" && typeof overlay.id !== "number") {
 			try {
 				overlay.id.stop();
 			} catch (e) {
 				// Ignore errors when stopping
+			}
+			try {
+				(overlay.id as any).dispose?.();
+			} catch (e) {
+				// Ignore errors when disposing
 			}
 		}
 	}
@@ -1193,6 +1201,59 @@ export async function deactivateStepOverlays(): Promise<void> {
 	state.isActive = false;
 	state.currentStep = null;
 	state.onNpcFound = undefined;
+}
+
+/**
+ * Handle player floor change (ladder, stairs, trapdoor, etc.).
+ * Recreates tile/wander overlays which get invalidated when the DLL removes
+ * overlays attached to deleted VAOs during floor transitions.
+ * NPC arrows are NOT recreated here — they auto-rescan via startNpcScanning.
+ */
+export async function onPlayerFloorChanged(newFloor: number): Promise<void> {
+	if (!state.isActive || !state.currentStep) return;
+
+	const oldFloor = lastKnownFloor;
+	lastKnownFloor = newFloor;
+
+	console.log(`[QuestOverlay] Floor changed ${oldFloor} → ${newFloor}, recreating tile overlays`);
+
+	// Clear stale tile overlays and invalidate cached chunk VAO data
+	// (VAO IDs change after scene transitions, but the floor program survives)
+	if (tileOverlayManager) {
+		try { await tileOverlayManager.clearAllOverlays(); } catch {}
+		try { tileOverlayManager.invalidateChunkCache(); } catch {}
+	}
+
+	// Remove stale tile/wander handles from activeOverlays (keep NPC arrows — they auto-rescan)
+	state.activeOverlays = state.activeOverlays.filter(o => o.type === "npc-arrow");
+
+	// Recreate object tiles and wander radius from current step
+	const { npc: npcs, object: objects } = state.currentStep.highlights;
+	const gen = activationGeneration; // respect current generation
+
+	const tasks: Promise<void>[] = [];
+
+	if (!DEBUG_DISABLE_OBJECT_TILES) {
+		for (const obj of objects) {
+			tasks.push(drawObjectTiles(obj).then(handles => {
+				if (activationGeneration !== gen) return;
+				if (handles.length > 0) state.activeOverlays.push(...handles);
+			}).catch(e => console.warn("[QuestOverlay] Floor change tile error:", e)));
+		}
+	}
+
+	if (wanderRadiusEnabled) {
+		for (const npc of npcs) {
+			if (npc.wanderRadius) {
+				tasks.push(drawWanderRadiusFilled(npc).then(handle => {
+					if (activationGeneration !== gen) return;
+					if (handle) state.activeOverlays.push(handle);
+				}).catch(e => console.warn("[QuestOverlay] Floor change wander error:", e)));
+			}
+		}
+	}
+
+	await Promise.all(tasks);
 }
 
 /**
@@ -1392,6 +1453,7 @@ export async function clearPathOverlay(): Promise<void> {
 	for (const overlay of pathState.activePathOverlays) {
 		try {
 			overlay.stop();
+			(overlay as any).dispose?.();
 		} catch (e) {
 			// Ignore errors when stopping
 		}

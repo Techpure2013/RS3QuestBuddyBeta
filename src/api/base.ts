@@ -34,8 +34,13 @@ export function getApiServerBase(): string {
 }
 
 export function getImagesBase(): string {
-	// Images are served from same origin or proxied
-	return "";
+	// Images are served at www.techpure.dev/images/ (NGINX root-level alias).
+	// In production browser, "" works because /images/ resolves from origin root.
+	// In Electron or local dev, we need the full production URL.
+	const host = window.location.hostname;
+	const isLocal = host === "localhost" || host === "127.0.0.1";
+	const isElectron = !!(window as any).alt1gl || !!(window as any)._alt1gl;
+	return (isElectron || isLocal) ? "https://www.techpure.dev" : "";
 }
 
 export function getEditorBaseUrl(): string {

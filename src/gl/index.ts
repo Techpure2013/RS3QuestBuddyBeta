@@ -19,6 +19,7 @@ export {
 	getPendingNpcs,
 	prefetchQuestNpcHashes,
 	clearNpcHashCache,
+	onPlayerFloorChanged,
 	// Path overlay functions (2D tile markers) - available but not auto-triggered
 	drawPathOverlay,
 	clearPathOverlay,

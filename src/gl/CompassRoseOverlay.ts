@@ -739,15 +739,30 @@ export async function clearNpcCompassRose(markerId?: string): Promise<void> {
 		} catch (e) {
 			// Ignore
 		}
+		try {
+			(marker.captureOverlay as any)?.dispose?.();
+		} catch (e) {
+			// Ignore
+		}
 
 		try {
 			marker.renderOverlay.stop();
 		} catch (e) {
 			// Ignore
 		}
+		try {
+			(marker.renderOverlay as any)?.dispose?.();
+		} catch (e) {
+			// Ignore
+		}
 
 		try {
 			marker.vertexArray.destroy?.();
+		} catch (e) {
+			// Ignore
+		}
+		try {
+			(marker.vertexArray as any)?.dispose?.();
 		} catch (e) {
 			// Ignore
 		}
