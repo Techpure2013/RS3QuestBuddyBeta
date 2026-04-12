@@ -143,13 +143,13 @@ const isEqualShallow = (a: unknown, b: unknown): boolean => {
    Quest Point Overrides
    ========================================================================== */
 
+// Quest point overrides — currently empty since DB values are correct.
+// Add entries here if the techpure API ever has wrong quest_points values.
+// Format: "quest name lowercase" → correct QP value
+const QUEST_POINT_OVERRIDES: Record<string, number> = {};
+
 function getQuestPointOverride(title: string): number | null {
-  const lower = title.toLowerCase();
-  if (lower === "that old black magic: hermy and bass") return 2;
-  if (lower === "dimension of disaster: curse of arrav") return 3;
-  if (lower === "once upon a time in gielinor: finale") return 4;
-  if (lower === "necromancy!") return 1;
-  return null;
+  return QUEST_POINT_OVERRIDES[title.toLowerCase()] ?? null;
 }
 
 /* ==========================================================================
@@ -212,7 +212,12 @@ const derivedSelectors: PlayerDerivedSelectors = {
   },
 
   totalQuestPoints(): number {
-    return this.completedQuests().reduce((sum, q) => sum + (q.questPoints || 0), 0);
+    // Use enrichedQuests which takes QP from the questList (our DB)
+    // rather than the RS3 API, which returns 0 for many Arc miniquests.
+    // Apply QUEST_POINT_OVERRIDES for quests where the questList is also wrong.
+    return this.enrichedQuests()
+      .filter(q => q.status === "COMPLETED")
+      .reduce((sum, q) => sum + (getQuestPointOverride(q.questName) ?? q.questPoints ?? 0), 0);
   },
 
   enrichedQuests(): EnrichedQuest[] {
