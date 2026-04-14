@@ -327,7 +327,7 @@ export class DialogBoxReader {
     return await patchrs.native.recordRenderCalls({
       maxframes: 1,
       framebufferId: 0,
-      features: ["vertexarray", "uniforms", "texturesnapshot"]
+      features: ["uniforms", "texturesnapshot"]
     });
   }
 

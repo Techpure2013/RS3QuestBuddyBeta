@@ -58,7 +58,7 @@ export class PlayerPositionTracker {
     let renders: any[] = [];
     try {
       renders = await patchrs.native.recordRenderCalls({ maxframes: 1,
-        features: ["vertexarray", "uniforms"],
+        features: ["uniforms"],
       });
       return this.findPlayer(renders);
     } catch (e) {

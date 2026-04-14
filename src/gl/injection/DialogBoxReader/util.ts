@@ -38,8 +38,9 @@ export const uiScaleState: UIScaleInfo = {
 
 /** Minimum delay between render stream frame captures (ms).
  * Lower = more responsive dialog detection but higher CPU/GPU cost.
- * 150ms ≈ 7 checks/second — sufficient for dialog button detection. */
-const RENDER_STREAM_INTERVAL_MS = 150;
+ * 300ms ≈ 3 checks/second — sufficient for dialog button detection.
+ * (Was 150ms but caused 50% FPS drops from excessive IPC + GL pipeline stalls) */
+const RENDER_STREAM_INTERVAL_MS = 300;
 
 // TODO make this into a lib function
 // turned out slightly more complicated because rs uses a different framebuffer for ui scaling
@@ -49,7 +50,7 @@ export function renderStream(glapi: patchrs.Alt1GlClient, cb: (state: patchrs.Re
         framebufferId: 0,
         // texturesnapshot populates 'samplers' with TextureSnapshot (has texid, width, height)
         // textures populates 'textures' with TrackedTexture (also has texid, width, height)
-        features: ["vertexarray", "uniforms", "texturesnapshot"]
+        features: ["uniforms", "texturesnapshot"]
     }
     // implementation that doesnt pile up calls if the consumer is slow
     let closed = false;
