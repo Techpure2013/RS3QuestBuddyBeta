@@ -36,15 +36,16 @@ export const uiScaleState: UIScaleInfo = {
     uiFramebufferId: -1,
 };
 
-/** Minimum delay between render stream frame captures (ms).
- * Lower = more responsive dialog detection but higher CPU/GPU cost.
- * 300ms ≈ 3 checks/second — sufficient for dialog button detection.
- * (Was 150ms but caused 50% FPS drops from excessive IPC + GL pipeline stalls) */
-const RENDER_STREAM_INTERVAL_MS = 300;
+/** Adaptive render stream intervals (ms).
+ * IDLE: No dialog detected — slow polling to minimize FPS impact.
+ * ACTIVE: Dialog detected — fast polling for responsive button highlighting.
+ * Each recordRenderCalls stalls the GL pipeline for ~1 frame, so fewer = better FPS. */
+const RENDER_STREAM_IDLE_MS = 2000;   // 0.5 checks/sec when no dialog visible
+const RENDER_STREAM_ACTIVE_MS = 300;  // 3 checks/sec when dialog is on screen
 
 // TODO make this into a lib function
 // turned out slightly more complicated because rs uses a different framebuffer for ui scaling
-export function renderStream(glapi: patchrs.Alt1GlClient, cb: (state: patchrs.RenderInvocation[]) => void) {
+export function renderStream(glapi: patchrs.Alt1GlClient, cb: (state: patchrs.RenderInvocation[]) => void | boolean) {
     // return glapi.streamRenderCalls(opts, cb);
     let opts: patchrs.RecordRenderOptions = {
         framebufferId: 0,
@@ -57,6 +58,7 @@ export function renderStream(glapi: patchrs.Alt1GlClient, cb: (state: patchrs.Re
     let scalingtexture = 0;
     let lastScalerSeenFrame = 0;
     let frameCount = 0;
+    let dialogActive = false; // Tracks whether a dialog was detected last frame
 
     // Helper to find the scaling texture from render data
     const findScalingTexture = (renders: patchrs.RenderInvocation[]): number | null => {
@@ -110,8 +112,10 @@ export function renderStream(glapi: patchrs.Alt1GlClient, cb: (state: patchrs.Re
             }
 
             while (!closed) {
+                // When idle (no dialog), skip the expensive UI framebuffer capture on 4K —
+                // saves 1 GL pipeline stall per tick. Only capture both when dialog is active.
                 let mainrenders = glapi.recordRenderCalls({ maxframes: 1, ...opts });
-                let uirenders = (scalingtexture == 0 ? [] : glapi.recordRenderCalls({ maxframes: 1, ...opts, framebufferId: undefined, framebufferTexture: scalingtexture }));
+                let uirenders = (scalingtexture == 0 || !dialogActive ? [] : glapi.recordRenderCalls({ maxframes: 1, ...opts, framebufferId: undefined, framebufferTexture: scalingtexture }));
                 let [mainResults, uiResults] = await Promise.all([mainrenders, uirenders]);
 
                 // Extract UI framebuffer ID from UI renders
@@ -184,16 +188,20 @@ export function renderStream(glapi: patchrs.Alt1GlClient, cb: (state: patchrs.Re
                 }
 
                 try {
-                    cb(renders);
+                    // Callback can return true to signal dialog was detected (enables fast polling)
+                    const result = cb(renders);
+                    dialogActive = result === true;
                 } finally {
                     // Dispose all render invocations to free native GPU shared memory.
                     // MUST happen after cb() completes — the callback processes renders synchronously.
                     for (const r of renders) { try { r.dispose?.(); } catch (_) {} }
                 }
 
-                // Throttle: wait before capturing the next frame to reduce GPU/CPU overhead.
-                // Without this delay the loop runs every GPU frame, which tanks FPS.
-                await new Promise(resolve => setTimeout(resolve, RENDER_STREAM_INTERVAL_MS));
+                // Adaptive throttle: fast when dialog detected, slow when idle.
+                // Each recordRenderCalls stalls the GL pipeline for ~1 frame.
+                // In idle mode (no dialog), 2s interval = negligible FPS impact.
+                const interval = dialogActive ? RENDER_STREAM_ACTIVE_MS : RENDER_STREAM_IDLE_MS;
+                await new Promise(resolve => setTimeout(resolve, interval));
             }
         })(),
         close: async () => {

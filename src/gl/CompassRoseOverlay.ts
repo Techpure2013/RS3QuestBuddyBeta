@@ -544,6 +544,7 @@ export async function drawNpcCompassRoseAttached(
 				uniformSources: uniformSources,
 				uniformBuffer: new Uint8Array(uniforms.buffer.buffer),
 				ranges: [{ start: 0, length: indices.length }],
+				alphaBlend: true, // Required: without this, inherits NPC's opaque blend state
 			}
 		);
 

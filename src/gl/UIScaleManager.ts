@@ -221,86 +221,70 @@ export async function initUIScaleManager(): Promise<boolean> {
 function startScaleMonitoring(): void {
   if (state.stream || !state.patchrs?.native) return;
 
-  // Monitor for resolution changes every 2 seconds
+  // Monitor for resolution changes using cheap getRsWidth/getRsHeight checks.
+  // Only fires recordRenderCalls when dimensions actually change (rare).
+  // Before this fix, recordRenderCalls ran every 2s forever — each call stalls
+  // the GL pipeline for ~1 frame, causing measurable FPS drops even when idle.
   const monitorScale = async () => {
     while (state.stream !== null && state.patchrs?.native) {
       let renders: any[] = [];
       try {
-        // Get viewport from render data (most reliable)
-        renders = await state.patchrs.native.recordRenderCalls({
-          maxframes: 1,
-          features: [],
-        });
-
-        const viewport = renders.find(r => r.viewport)?.viewport;
-        const currentWidth = viewport?.width || state.patchrs.native.getRsWidth() || 1920;
-        const currentHeight = viewport?.height || state.patchrs.native.getRsHeight() || 1080;
+        // CHEAP CHECK: use getRsWidth/getRsHeight (no GL pipeline stall)
+        const currentWidth = state.patchrs.native.getRsWidth() || 1920;
+        const currentHeight = state.patchrs.native.getRsHeight() || 1080;
 
         // Detect resolution change with stability check
         if (currentWidth !== state.lastScreenWidth || currentHeight !== state.lastScreenHeight) {
           // Wait 500ms and re-check to filter transient changes (e.g., teleport animations)
           await new Promise(resolve => setTimeout(resolve, 500));
 
-          let confirmRenders: any[] = [];
-          try {
-            confirmRenders = await state.patchrs.native.recordRenderCalls({
-              maxframes: 1,
-              features: [],
-            });
-            const confirmViewport = confirmRenders.find(r => r.viewport)?.viewport;
-            const confirmWidth = confirmViewport?.width || state.patchrs.native.getRsWidth() || 1920;
-            const confirmHeight = confirmViewport?.height || state.patchrs.native.getRsHeight() || 1080;
+          // Confirm the change is real (not a transient teleport viewport)
+          const confirmWidth = state.patchrs.native.getRsWidth() || 1920;
+          const confirmHeight = state.patchrs.native.getRsHeight() || 1080;
 
-            // Only broadcast if resolution is still the same as the first detection
-            // (filters out transient viewport changes from teleport/loading animations)
-            if (confirmWidth !== state.lastScreenWidth || confirmHeight !== state.lastScreenHeight) {
-              // Reject obviously invalid resolutions — RS3 loading screens use tiny viewports (e.g. 128x128)
-              if (confirmWidth >= MIN_VALID_RESOLUTION && confirmHeight >= MIN_VALID_RESOLUTION) {
-                state.lastScreenWidth = confirmWidth;
-                state.lastScreenHeight = confirmHeight;
-                state.scaleInfo.screenWidth = confirmWidth;
-                state.scaleInfo.screenHeight = confirmHeight;
+          // Only broadcast if resolution is still different from what we had
+          if (confirmWidth !== state.lastScreenWidth || confirmHeight !== state.lastScreenHeight) {
+            // Reject obviously invalid resolutions — RS3 loading screens use tiny viewports
+            if (confirmWidth >= MIN_VALID_RESOLUTION && confirmHeight >= MIN_VALID_RESOLUTION) {
+              state.lastScreenWidth = confirmWidth;
+              state.lastScreenHeight = confirmHeight;
+              state.scaleInfo.screenWidth = confirmWidth;
+              state.scaleInfo.screenHeight = confirmHeight;
 
-                // Update scale info based on resolution
-                if (confirmWidth > 2560) {
-                  const { uiWidth, uiHeight } = calculateAssumedUISize(confirmWidth, confirmHeight);
-                  state.scaleInfo.isScaled = true;
-                  state.scaleInfo.uiWidth = uiWidth;
-                  state.scaleInfo.uiHeight = uiHeight;
-                  state.scaleInfo.scaleX = confirmWidth / uiWidth;
-                  state.scaleInfo.scaleY = confirmHeight / uiHeight;
-                } else {
-                  // Non-4K: check for DPI scaling
-                  const dpiInfo = await detectDPIScaling();
-                  if (dpiInfo) {
-                    state.scaleInfo.isScaled = true;
-                    state.scaleInfo.screenWidth = dpiInfo.screenWidth;
-                    state.scaleInfo.screenHeight = dpiInfo.screenHeight;
-                    state.scaleInfo.uiWidth = dpiInfo.uiWidth;
-                    state.scaleInfo.uiHeight = dpiInfo.uiHeight;
-                    state.scaleInfo.scaleX = dpiInfo.screenWidth / dpiInfo.uiWidth;
-                    state.scaleInfo.scaleY = dpiInfo.screenHeight / dpiInfo.uiHeight;
-                  } else {
-                    state.scaleInfo.isScaled = false;
-                    state.scaleInfo.uiWidth = confirmWidth;
-                    state.scaleInfo.uiHeight = confirmHeight;
-                    state.scaleInfo.scaleX = 1;
-                    state.scaleInfo.scaleY = 1;
-                  }
-                }
-
-                notifyResolutionChange();
+              // Detect actual DPI/UI scaling via Lanczos scaler (uses recordRenderCalls
+              // with texturesnapshot — only fires on resolution CHANGE, not every poll)
+              const dpiInfo = await detectDPIScaling();
+              if (dpiInfo) {
+                state.scaleInfo.isScaled = true;
+                state.scaleInfo.screenWidth = dpiInfo.screenWidth;
+                state.scaleInfo.screenHeight = dpiInfo.screenHeight;
+                state.scaleInfo.uiWidth = dpiInfo.uiWidth;
+                state.scaleInfo.uiHeight = dpiInfo.uiHeight;
+                state.scaleInfo.scaleX = dpiInfo.screenWidth / dpiInfo.uiWidth;
+                state.scaleInfo.scaleY = dpiInfo.screenHeight / dpiInfo.uiHeight;
+              } else if (confirmWidth > 2560) {
+                // Fallback: assume UI scaling for high-res when scaler not detected
+                const { uiWidth, uiHeight } = calculateAssumedUISize(confirmWidth, confirmHeight);
+                state.scaleInfo.isScaled = true;
+                state.scaleInfo.uiWidth = uiWidth;
+                state.scaleInfo.uiHeight = uiHeight;
+                state.scaleInfo.scaleX = confirmWidth / uiWidth;
+                state.scaleInfo.scaleY = confirmHeight / uiHeight;
+              } else {
+                state.scaleInfo.isScaled = false;
+                state.scaleInfo.uiWidth = confirmWidth;
+                state.scaleInfo.uiHeight = confirmHeight;
+                state.scaleInfo.scaleX = 1;
+                state.scaleInfo.scaleY = 1;
               }
-            }
-          } finally {
-            for (const r of confirmRenders) {
-              try { r.dispose?.()?.catch?.(() => {}); } catch (_) {}
+
+              notifyResolutionChange();
             }
           }
         }
 
-        // Wait before next check (2 seconds)
-        await new Promise(resolve => setTimeout(resolve, 2000));
+        // Wait before next check — cheap getRsWidth/getRsHeight doesn't stall GL, so 3s is fine
+        await new Promise(resolve => setTimeout(resolve, 3000));
       } catch (e: any) {
         if (!e?.message?.includes("No rs process")) {
           console.warn("[UIScaleManager] Monitoring error:", e);

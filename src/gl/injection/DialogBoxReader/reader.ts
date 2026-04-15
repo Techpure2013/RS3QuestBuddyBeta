@@ -403,7 +403,7 @@ export class DialogBoxReader {
     // 1. Finding the Lanczos scaler and its source texture
     // 2. Recording UI renders from the scaling texture's framebuffer
     // This ensures we capture UI elements at 4K where they're rendered to a separate fb
-    this.stream = renderStream(patchrs.native, (renders) => this.handleStreamFrame(renders));
+    this.stream = renderStream(patchrs.native, (renders) => { return this.handleStreamFrame(renders); });
   }
 
   /**
@@ -411,8 +411,8 @@ export class DialogBoxReader {
    * Note: This is called synchronously from the render stream.
    * For pressed detection, we capture framebuffer async when buttons are found.
    */
-  private handleStreamFrame(renders: patchrs.RenderInvocation[]): void {
-    if (!renders || renders.length === 0) return;
+  private handleStreamFrame(renders: patchrs.RenderInvocation[]): boolean {
+    if (!renders || renders.length === 0) return false;
 
     try {
       // Detect dialog buttons from render data
@@ -444,11 +444,15 @@ export class DialogBoxReader {
           // Ignore callback errors
         }
       }
+
+      // Signal to renderStream whether a dialog was detected (enables adaptive polling)
+      return result !== null && result.buttons.length > 0;
     } catch (e: any) {
       const msg = e?.message || String(e);
       if (!msg.includes("No rs process")) {
         console.warn("[DialogBoxReader] Stream frame error:", msg);
       }
+      return false;
     }
   }
 

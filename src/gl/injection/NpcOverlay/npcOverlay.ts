@@ -2083,6 +2083,30 @@ export class NpcOverlay {
   }
 
   /**
+   * Match a buffer hash against pre-scanned groups and draw arrow if found.
+   * Used to share ONE recording across multiple NPC lookups (avoids per-NPC frame captures).
+   */
+  async arrowByBufferHashFromGroups(
+    bufferHash: string,
+    groups: NpcMeshGroup[],
+    options?: { color?: RGBA | [number, number, number, number]; size?: number; height?: number },
+  ): Promise<{ handle: patchrs.GlOverlay | null; npc: NpcMesh | null; group: NpcMeshGroup | null }> {
+    const { fromHexHash, computeCombinedHash } = await import("./npcBufferHash");
+    const targetHashNum = fromHexHash(bufferHash);
+
+    for (const group of groups) {
+      const combined = computeCombinedHash(group.renders);
+      if (combined.num === targetHashNum) {
+        this.updateVaoCache(bufferHash, group.mainMesh.vaoId, group.mainMesh.framebufferId);
+        const handle = await this.draw3DArrowAboveNpc(group.mainMesh, options);
+        return { handle, npc: group.mainMesh, group };
+      }
+    }
+
+    return { handle: null, npc: null, group: null };
+  }
+
+  /**
    * Find the player's position using the known player buffer hash.
    * This helps identify where the player is on the map for accurate NPC positioning.
    *

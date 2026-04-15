@@ -51,6 +51,8 @@ void main() {
         finalColor += glowColor * blink * vGlow * 0.3;
     }
 
-    // No color boost - keep colors natural
-    FragColor = vec4(finalColor, 1.0);
+    // Slight translucency so it doesn't fully occlude scene geometry behind it.
+    // Glow blades are brighter and more opaque, non-glow are slightly see-through.
+    float alpha = mix(0.85, 0.95, vGlow);
+    FragColor = vec4(finalColor, alpha);
 }

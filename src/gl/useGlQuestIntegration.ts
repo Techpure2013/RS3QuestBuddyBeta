@@ -434,6 +434,33 @@ export function useGlQuestIntegration(
 		}
 	};
 
+	// Dialog proximity/movement tracking
+	const dialogProximityTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+	const lastDialogPlayerPosRef = useRef<{ x: number; z: number } | null>(null);
+
+	const DIALOG_PROXIMITY_TILES = 5;
+	const DIALOG_MOVEMENT_THRESHOLD = 2; // tiles moved = "moving"
+	const DIALOG_PROXIMITY_CHECK_MS = 1000; // check every 1s (uses cached position — zero GPU cost)
+
+	/** Actually start the render stream (called when proximity + stationary conditions met) */
+	const activateDialogStream = useCallback(() => {
+		if (!dialogReaderRef.current?.isInitialized()) return;
+		if (dialogReaderRef.current.isRunning()) return;
+
+		dialogReaderRef.current.clearCallbacks();
+		dialogReaderRef.current.onDetect(handleDialogDetection);
+		dialogReaderRef.current.start();
+		console.log("[GlQuest] Dialog stream activated (player near NPC and stationary)");
+	}, [handleDialogDetection]);
+
+	/** Stop the render stream (called when player moves away) */
+	const deactivateDialogStream = useCallback(() => {
+		if (dialogReaderRef.current?.isRunning()) {
+			dialogReaderRef.current.stop();
+			console.log("[GlQuest] Dialog stream deactivated (player moved away)");
+		}
+	}, []);
+
 	// Start dialog detection for a step
 	const startDialogDetection = useCallback((step: QuestStep) => {
 		// Check if dialog solver is enabled
@@ -445,7 +472,6 @@ export function useGlQuestIntegration(
 		const prevOptions = currentDialogOptionsRef.current;
 
 		// Check if dialog options changed (new step) - if so, clear the completed tracking
-		// This allows re-completing the same dialogs if the step changes
 		const optionsChanged = dialogOptions.length !== prevOptions.length ||
 			dialogOptions.some((opt, i) => opt !== prevOptions[i]);
 		if (optionsChanged && completedDialogCountsRef.current.size > 0) {
@@ -456,9 +482,11 @@ export function useGlQuestIntegration(
 		currentDialogOptionsRef.current = dialogOptions;
 
 		if (dialogOptions.length === 0) {
-			// No dialog options - stop if running
-			if (dialogReaderRef.current?.isRunning()) {
-				dialogReaderRef.current.stop();
+			// No dialog options - stop stream and proximity checker
+			deactivateDialogStream();
+			if (dialogProximityTimerRef.current) {
+				clearInterval(dialogProximityTimerRef.current);
+				dialogProximityTimerRef.current = null;
 			}
 			return;
 		}
@@ -468,19 +496,77 @@ export function useGlQuestIntegration(
 			return;
 		}
 
-		// Stop existing and start fresh
-		if (dialogReaderRef.current.isRunning()) {
-			dialogReaderRef.current.stop();
+		// Collect NPC locations for proximity checking
+		const npcLocations = (step.highlights?.npc ?? [])
+			.filter(n => n.npcLocation)
+			.map(n => ({ x: n.npcLocation.lng, z: n.npcLocation.lat }));
+
+		// Also include object locations as potential dialog triggers
+		const objLocations = (step.highlights?.object ?? [])
+			.filter((o: any) => o.objectLocation)
+			.map((o: any) => ({ x: o.objectLocation.lng, z: o.objectLocation.lat }));
+
+		const dialogLocations = [...npcLocations, ...objLocations];
+
+		// If no known locations, fall back to starting stream immediately
+		if (dialogLocations.length === 0) {
+			activateDialogStream();
+			return;
 		}
 
-		// Clear previous callbacks to prevent accumulation, then register fresh
-		dialogReaderRef.current.clearCallbacks();
-		dialogReaderRef.current.onDetect(handleDialogDetection);
-		dialogReaderRef.current.start();
-	}, [handleDialogDetection, dialogSolverEnabled]);
+		// Stop any existing proximity timer
+		if (dialogProximityTimerRef.current) {
+			clearInterval(dialogProximityTimerRef.current);
+		}
+
+		// Start lightweight proximity + movement checker (uses cached position — zero GPU cost)
+		lastDialogPlayerPosRef.current = null;
+		dialogProximityTimerRef.current = setInterval(() => {
+			const { getPlayerPosition: getPos } = require("./PlayerPositionTracker");
+			const pos = getPos();
+			if (!pos) return;
+
+			const playerX = pos.location.lng;
+			const playerZ = pos.location.lat;
+
+			// Check proximity to any dialog NPC/object
+			const isNearby = dialogLocations.some(loc => {
+				const dx = playerX - loc.x;
+				const dz = playerZ - loc.z;
+				return (dx * dx + dz * dz) <= DIALOG_PROXIMITY_TILES * DIALOG_PROXIMITY_TILES;
+			});
+
+			// Check if player is stationary
+			const lastPos = lastDialogPlayerPosRef.current;
+			let isStationary = true;
+			if (lastPos) {
+				const dx = playerX - lastPos.x;
+				const dz = playerZ - lastPos.z;
+				isStationary = (dx * dx + dz * dz) <= DIALOG_MOVEMENT_THRESHOLD * DIALOG_MOVEMENT_THRESHOLD;
+			}
+			lastDialogPlayerPosRef.current = { x: playerX, z: playerZ };
+
+			if (isNearby && isStationary) {
+				// Player is near NPC and standing still — start dialog stream
+				activateDialogStream();
+			} else if (!isNearby) {
+				// Player moved away — stop the stream to save FPS
+				deactivateDialogStream();
+			}
+			// If nearby but moving, keep current state (don't start/stop rapidly)
+		}, DIALOG_PROXIMITY_CHECK_MS);
+
+	}, [handleDialogDetection, dialogSolverEnabled, activateDialogStream, deactivateDialogStream]);
 
 	// Stop dialog detection
 	const stopDialogDetection = useCallback(async () => {
+		// Stop proximity checker
+		if (dialogProximityTimerRef.current) {
+			clearInterval(dialogProximityTimerRef.current);
+			dialogProximityTimerRef.current = null;
+		}
+		lastDialogPlayerPosRef.current = null;
+
 		if (dialogReaderRef.current?.isRunning()) {
 			dialogReaderRef.current.stop();
 		}
@@ -496,6 +582,10 @@ export function useGlQuestIntegration(
 	// Cleanup on unmount
 	useEffect(() => {
 		return () => {
+			if (dialogProximityTimerRef.current) {
+				clearInterval(dialogProximityTimerRef.current);
+				dialogProximityTimerRef.current = null;
+			}
 			deactivateStepOverlays();
 		};
 	}, []);

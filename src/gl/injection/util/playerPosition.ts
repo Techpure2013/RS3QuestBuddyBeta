@@ -356,7 +356,9 @@ export class PassivePlayerTracker {
     if (this.initialized) return true;
 
     try {
-      this.pollTimer = setInterval(() => this.pollOnce(), 3000);
+      // Poll every 5s — each recordRenderCalls stalls the GL pipeline for ~1 frame.
+      // The outer PlayerPositionTracker reads cached position at 100ms (instant).
+      this.pollTimer = setInterval(() => this.pollOnce(), 5000);
       this.initialized = true;
       // Immediate first poll
       this.pollOnce();

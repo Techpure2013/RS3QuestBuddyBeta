@@ -51,18 +51,24 @@ interface QuestOverlayState {
 	resolutionChangeCleanup: (() => void) | null; // Cleanup function for resolution change listener
 }
 
-// How long before an NPC is considered "out of view" (10 seconds)
-const NPC_VISIBILITY_TIMEOUT = 10000;
-// How often to check NPC visibility (5 seconds)
-const VISIBILITY_CHECK_INTERVAL = 5000;
-// How often to check player proximity to static overlays (10 seconds)
-const PROXIMITY_CHECK_INTERVAL = 10000;
+// How long before an NPC is considered "out of view" (60 seconds)
+// Longer timeout = fewer expensive re-scans. The overlay auto-hides when VAO isn't rendered.
+const NPC_VISIBILITY_TIMEOUT = 60000;
+// How often to check NPC visibility (60 seconds)
+// Only needed to detect VAO ID reassignment (rare). The overlay already auto-hides
+// when the NPC's draw call stops — no JS needed for that.
+const VISIBILITY_CHECK_INTERVAL = 60000;
+// How often to check player proximity to static overlays (60 seconds)
+const PROXIMITY_CHECK_INTERVAL = 60000;
 // Distance in tiles to trigger NPC scan when player approaches wander radius
 const PROXIMITY_SCAN_DISTANCE = 30;
 
 // Generation counter: incremented on each activateStepOverlays call.
 // In-flight parallel tasks check this to bail out if a newer activation superseded them.
 let activationGeneration = 0;
+
+// Adaptive scan: fast retries when step first activates, then slows down
+let scanRetryCount = 0;
 
 // Track the player's floor to clear/recreate overlays on floor change
 let lastKnownFloor = -1;
@@ -214,8 +220,10 @@ const COLORS = {
 	objectTile: [0, 128, 255, 200] as [number, number, number, number],
 };
 
-// Scan interval in ms
-const SCAN_INTERVAL = 5000;
+// Scan intervals: fast retries when player is running to NPC, then back off
+const SCAN_INTERVAL_FAST = 3000;  // First few retries — player likely approaching
+const SCAN_INTERVAL_SLOW = 15000; // After several misses — NPC probably far away
+const SCAN_FAST_RETRIES = 4;      // How many fast retries before switching to slow
 
 // Debug flags - set to true to disable specific overlay types for testing
 const DEBUG_DISABLE_ALL_OVERLAYS = false;
@@ -266,7 +274,8 @@ export async function setWanderRadiusEnabled(enabled: boolean): Promise<void> {
 
 			// Start scanning interval if we have pending items
 			if (state.pendingWanderNpcs.length > 0 && !state.scanInterval) {
-				state.scanInterval = setInterval(scanForPendingNpcs, SCAN_INTERVAL);
+				scanRetryCount = 0;
+				scheduleNextScan();
 			}
 		}
 	}
@@ -358,7 +367,7 @@ function getHashesForNpc(npc: NpcHighlight): string[] {
  *
  * Optimization: Uses VAO cache for fast lookups when we've seen this NPC before
  */
-async function highlightNpcByHash(npc: NpcHighlight): Promise<OverlayHandle | null> {
+async function highlightNpcByHash(npc: NpcHighlight, preScannedGroups?: any[]): Promise<OverlayHandle | null> {
 	// Skip compass rose if not enabled
 	if (!state.compassOverlayEnabled) {
 		return null;
@@ -405,18 +414,22 @@ async function highlightNpcByHash(npc: NpcHighlight): Promise<OverlayHandle | nu
 				}
 			}
 
-			// SLOW PATH: Full scan when cache miss
-			// Get player position for distance-based filtering (reduces hash computations for far NPCs)
-			const playerPos = getPlayerPosition();
-			const positionFilter = playerPos ? {
-				// PlayerPositionData.location uses lat (north/south = z) and lng (east/west = x)
-				playerPosition: { x: playerPos.location.lng, z: playerPos.location.lat },
-				maxDistanceFromPlayer: 30 // tiles - reduced for memory optimization
-			} : undefined;
-
+			// SLOW PATH: Match against pre-scanned groups (shared recording) or do fresh scan
 			for (const hash of hashes) {
 				try {
-					const result = await state.npcOverlay.arrowByBufferHash(hash, undefined, positionFilter);
+					let result;
+					if (preScannedGroups) {
+						// Use shared recording — no new frame capture needed
+						result = await state.npcOverlay.arrowByBufferHashFromGroups(hash, preScannedGroups);
+					} else {
+						// Fallback: individual scan (first activation, no shared recording)
+						const playerPos = getPlayerPosition();
+						const positionFilter = playerPos ? {
+							playerPosition: { x: playerPos.location.lng, z: playerPos.location.lat },
+							maxDistanceFromPlayer: 30
+						} : undefined;
+						result = await state.npcOverlay.arrowByBufferHash(hash, undefined, positionFilter);
+					}
 
 					if (result.npc) {
 						const framebufferId = result.group?.framebufferId ?? result.npc.framebufferId;
@@ -533,11 +546,49 @@ async function scanForPendingNpcs(): Promise<void> {
 		return;
 	}
 
+	// PROXIMITY GATE: Only do the expensive GPU scan if the player is within range
+	// of at least one pending NPC. No point stalling the GL pipeline when the player
+	// is on the other side of the map.
+	const SCAN_PROXIMITY_TILES = 25;
+	const playerPos = getPlayerPosition();
+	if (playerPos) {
+		const playerX = playerPos.location.lng;
+		const playerZ = playerPos.location.lat;
+		const anyNearby = state.pendingNpcs.some(npc => {
+			const npcX = npc.npcLocation?.lng ?? 0;
+			const npcZ = npc.npcLocation?.lat ?? 0;
+			const dx = playerX - npcX;
+			const dz = playerZ - npcZ;
+			return (dx * dx + dz * dz) <= SCAN_PROXIMITY_TILES * SCAN_PROXIMITY_TILES;
+		});
+		if (!anyNearby) {
+			// Player is far from all pending NPCs — skip expensive scan entirely
+			return;
+		}
+	}
+
 	// EXPENSIVE: Try to re-attach any static overlays to VAOs (requires render capture)
 	await tryReattachStaticOverlays();
 
 	// If we successfully re-attached any, start monitoring again
 	startVisibilityMonitoring();
+
+	// ONE shared recording for ALL pending NPC lookups (was: per-NPC recording)
+	let sharedGroups: any[] | undefined;
+	if (state.npcOverlay && state.pendingNpcs.length > 0) {
+		try {
+			sharedGroups = await state.npcOverlay.scanGrouped({
+				excludeFloor: true,
+				playerPosition: (() => {
+					const p = getPlayerPosition();
+					return p ? { x: p.location.lng, z: p.location.lat } : undefined;
+				})(),
+				maxDistanceFromPlayer: 30,
+			});
+		} catch (e) {
+			console.warn("[QuestOverlay] Shared NPC scan failed:", e);
+		}
+	}
 
 	const stillPending: NpcHighlight[] = [];
 
@@ -554,11 +605,19 @@ async function scanForPendingNpcs(): Promise<void> {
 			continue;
 		}
 
-		const handle = await highlightNpcByHash(npc);
+		// Pass shared groups — no new recording per NPC
+		const handle = await highlightNpcByHash(npc, sharedGroups);
 		if (handle) {
 			state.activeOverlays.push(handle);
 		} else {
 			stillPending.push(npc);
+		}
+	}
+
+	// Dispose shared groups after all NPCs processed
+	if (sharedGroups) {
+		for (const group of sharedGroups) {
+			for (const r of (group.renders || [])) { try { (r as any).dispose?.(); } catch (_) {} }
 		}
 	}
 
@@ -571,6 +630,13 @@ async function scanForPendingNpcs(): Promise<void> {
 		state.scanInterval) {
 		clearInterval(state.scanInterval);
 		state.scanInterval = null;
+	} else if (state.scanInterval) {
+		// Adaptive: increment retry count, switch from fast to slow when threshold hit
+		scanRetryCount++;
+		if (scanRetryCount === SCAN_FAST_RETRIES) {
+			// Transition: clear fast interval, start slow interval
+			scheduleNextScan();
+		}
 	}
 }
 
@@ -586,8 +652,20 @@ function startNpcScanning(): void {
 		state.pendingObjects.length > 0;
 
 	if (hasPending) {
-		state.scanInterval = setInterval(scanForPendingNpcs, SCAN_INTERVAL);
+		// Reset retry counter — fast retries for a new step activation
+		scanRetryCount = 0;
+		scheduleNextScan();
 	}
+}
+
+/** Schedule the next scan with adaptive interval — fast at first, then backs off */
+function scheduleNextScan(): void {
+	if (state.scanInterval) {
+		clearInterval(state.scanInterval);
+		state.scanInterval = null;
+	}
+	const interval = scanRetryCount < SCAN_FAST_RETRIES ? SCAN_INTERVAL_FAST : SCAN_INTERVAL_SLOW;
+	state.scanInterval = setInterval(scanForPendingNpcs, interval);
 }
 
 /**
