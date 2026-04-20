@@ -769,19 +769,16 @@ export async function startPlayerTracking(
 					// Update last detected position for next comparison
 					lastDetectedPosition = { x: gameX, y: gameY, floor };
 
-					// Proactively preload collision data around player for faster pathfinding
-					// Only preload if player has moved significantly or floor changed
-					// (gameX and gameY are already calculated above for transport detection)
-					const shouldPreload = !lastPreloadPosition ||
-						lastPreloadPosition.floor !== floor ||
-						Math.abs(gameX - lastPreloadPosition.x) > PRELOAD_MOVE_THRESHOLD ||
-						Math.abs(gameY - lastPreloadPosition.y) > PRELOAD_MOVE_THRESHOLD;
-
-					if (shouldPreload) {
-						lastPreloadPosition = { x: gameX, y: gameY, floor };
-						// Fire and forget - don't block position updates
-						preloadCollisionData(gameX, gameY, floor, 2).catch(() => {});
-					}
+					// TODO: Re-enable collision preload when ready
+					// const shouldPreload = !lastPreloadPosition ||
+					// 	lastPreloadPosition.floor !== floor ||
+					// 	Math.abs(gameX - lastPreloadPosition.x) > PRELOAD_MOVE_THRESHOLD ||
+					// 	Math.abs(gameY - lastPreloadPosition.y) > PRELOAD_MOVE_THRESHOLD;
+					//
+					// if (shouldPreload) {
+					// 	lastPreloadPosition = { x: gameX, y: gameY, floor };
+					// 	preloadCollisionData(gameX, gameY, floor, 2).catch(() => {});
+					// }
 
 					// Check if teleport suppression has expired
 					if (isTeleporting && now >= teleportSuppressUntil) {

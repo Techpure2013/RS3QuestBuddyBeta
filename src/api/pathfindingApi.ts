@@ -46,16 +46,17 @@ export function getServerCollisionVersion(): number | null {
 /**
  * Invalidate specific collision tiles (called when server notifies of updates)
  */
+// TODO: Re-enable collision caching when ready
 export async function invalidateCollisionFiles(
-  files: Array<{ floor: number; fileX: number; fileY: number }>
+  _files: Array<{ floor: number; fileX: number; fileY: number }>
 ): Promise<void> {
-  console.log(`[PathfindingApi] Invalidating ${files.length} collision files from server notification`);
-  await invalidateCollisionTiles(files);
-
-  // Re-fetch the invalidated files in the background
-  for (const file of files) {
-    getCollisionTiles(file.fileX, file.fileY, file.floor).catch(() => {});
-  }
+  // console.log(`[PathfindingApi] Invalidating ${_files.length} collision files from server notification`);
+  // await invalidateCollisionTiles(_files);
+  //
+  // // Re-fetch the invalidated files in the background
+  // for (const file of _files) {
+  //   getCollisionTiles(file.fileX, file.fileY, file.floor).catch(() => {});
+  // }
 }
 
 /**
@@ -65,83 +66,11 @@ export async function invalidateCollisionFiles(
  *
  * Total files: 5 x 10 x 4 = 200 files (~320MB total)
  */
+// TODO: Re-enable collision preloading when ready
 export async function preloadAllCollisionTiles(
-  onProgress?: (loaded: number, total: number, errors: number) => void
+  _onProgress?: (loaded: number, total: number, errors: number) => void
 ): Promise<{ success: boolean; loaded: number; errors: number }> {
-  if (isPreloadingAll) {
-    console.log("[PathfindingApi] Preload already in progress");
-    return { success: false, loaded: 0, errors: 0 };
-  }
-
-  isPreloadingAll = true;
-
-  // Calculate total files: (MAX_FILE_X + 1) * (MAX_FILE_Y + 1) * MAX_FLOORS = 5 * 10 * 4 = 200
-  const filesToLoad: Array<{ floor: number; fileX: number; fileY: number }> = [];
-
-  // First, check what we already have cached
-  const cachedKeys = await getAllCachedTileKeys();
-  const cachedSet = new Set(cachedKeys.map(k => `${k.floor}_${k.fileX}_${k.fileY}`));
-
-  // Build list of files we need to fetch for ALL floors (0-3)
-  for (let floor = 0; floor < MAX_FLOORS; floor++) {
-    for (let fileX = 0; fileX <= MAX_FILE_X; fileX++) {
-      for (let fileY = 0; fileY <= MAX_FILE_Y; fileY++) {
-        const key = `${floor}_${fileX}_${fileY}`;
-        if (!cachedSet.has(key)) {
-          filesToLoad.push({ floor, fileX, fileY });
-        }
-      }
-    }
-  }
-
-  if (filesToLoad.length === 0) {
-    console.log("[PathfindingApi] All collision tiles already cached");
-    isPreloadingAll = false;
-    return { success: true, loaded: cachedKeys.length, errors: 0 };
-  }
-
-  console.log(`[PathfindingApi] Preloading ${filesToLoad.length} collision files across all floors (${cachedKeys.length} already cached)`);
-
-  let loaded = cachedKeys.length;
-  let errors = 0;
-  const total = cachedKeys.length + filesToLoad.length;
-
-  preloadProgress = { loaded, total, errors };
-  onProgress?.(loaded, total, errors);
-
-  // Fetch in batches to avoid overwhelming the server
-  const BATCH_SIZE = 5;
-
-  for (let i = 0; i < filesToLoad.length; i += BATCH_SIZE) {
-    const batch = filesToLoad.slice(i, i + BATCH_SIZE);
-
-    await Promise.all(
-      batch.map(async ({ floor, fileX, fileY }) => {
-        try {
-          // Use noFallback=true so we don't accidentally cache floor 0 under higher floor keys
-          const result = await getCollisionTiles(fileX, fileY, floor, true);
-          if (result) {
-            loaded++;
-          } else {
-            // Not all floors exist for all areas - this is expected
-            // Don't count as error, just skip
-          }
-        } catch (e) {
-          // Network error or other issue
-          errors++;
-        }
-
-        preloadProgress = { loaded, total, errors };
-        onProgress?.(loaded, total, errors);
-      })
-    );
-  }
-
-  console.log(`[PathfindingApi] Preload complete: ${loaded}/${total} loaded, ${errors} errors`);
-  isPreloadingAll = false;
-  preloadProgress = null;
-
-  return { success: errors === 0, loaded, errors };
+  return { success: true, loaded: 0, errors: 0 };
 }
 
 /**
@@ -431,73 +360,15 @@ export async function isTileWalkable(
  *
  * @param noFallback - If true, don't fall back to floor 0 when higher floor not found (used for preloading)
  */
+// TODO: Re-enable collision loading when ready
+// All collision file fetching and IDB loading is disabled.
 export async function getCollisionTiles(
-  fileX: number,
-  fileY: number,
-  floor: number,
-  noFallback: boolean = false
+  _fileX: number,
+  _fileY: number,
+  _floor: number,
+  _noFallback: boolean = false
 ): Promise<CollisionData | null> {
-  // Check IndexedDB cache first
-  try {
-    const cached = await loadCollisionTile(floor, fileX, fileY);
-    if (cached) {
-      return {
-        fileX,
-        fileY,
-        floor,
-        data: cached,
-      };
-    }
-  } catch (e) {
-    // Cache miss or error, proceed with fetch
-  }
-
-  const apiBase = getApiBase();
-  // Match the RS3QuestMapBuddy API format: /api/collision/{floor}/0/{fileX}-{fileY}.png
-  // Note: getApiBase() already includes /api, so we just add /collision/...
-  const url = `${apiBase}/collision/${floor}/0/${fileX}-${fileY}.png`;
-
-  try {
-    console.log(`[PathfindingApi] Fetching collision data: ${url}`);
-    const response = await fetch(url);
-
-    if (!response.ok) {
-      // If floor-specific data not available, fall back to floor 0
-      // Many areas use the same collision map regardless of floor
-      if (floor > 0 && !noFallback) {
-        console.log(`[PathfindingApi] Floor ${floor} collision not found, falling back to floor 0`);
-        return getCollisionTiles(fileX, fileY, 0);
-      }
-      // During preload (noFallback=true), just return null for non-existent floors
-      if (noFallback && floor > 0) {
-        return null; // Floor doesn't exist - this is expected
-      }
-      console.warn(`[PathfindingApi] Collision fetch failed: ${response.status} ${response.statusText}`);
-      return null;
-    }
-
-    const buffer = await response.arrayBuffer();
-    const data = new Uint8Array(buffer);
-    console.log(`[PathfindingApi] Collision data received: ${buffer.byteLength} bytes`);
-
-    // Save to IndexedDB cache (fire and forget)
-    saveCollisionTile(floor, fileX, fileY, data).catch(() => {});
-
-    return {
-      fileX,
-      fileY,
-      floor,
-      data,
-    };
-  } catch (error) {
-    // If floor-specific data not available, fall back to floor 0
-    if (floor > 0 && !noFallback) {
-      console.log(`[PathfindingApi] Floor ${floor} collision error, falling back to floor 0`);
-      return getCollisionTiles(fileX, fileY, 0);
-    }
-    console.error("[PathfindingApi] Error fetching collision tiles:", error);
-    return null;
-  }
+  return null;
 }
 
 /**

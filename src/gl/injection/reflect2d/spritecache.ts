@@ -222,6 +222,11 @@ export class SpriteCache {
      * Uses pHash (perceptual hash) for cross-session stable item identification
      */
     async loadItemHashes(): Promise<void> {
+        // Skip API fetch in Electron — localhost:42069 dev server isn't running,
+        // and the failed fetch spams Chromium net::ERR_CONNECTION_REFUSED in console.
+        if (typeof navigator !== "undefined" && navigator.userAgent.includes("Electron")) {
+            return;
+        }
         try {
             const response = await fetch(`${ITEMS_API}?limit=500`);
             if (!response.ok) {
@@ -233,8 +238,8 @@ export class SpriteCache {
                 if (!item.name || !item.pHash) continue;
                 this.pHashItems.set(item.pHash, item.name);
             }
-        } catch (err) {
-            console.error("[SpriteCache] Failed to load item hashes from API:", err);
+        } catch {
+            // Silently ignore — API server (localhost:42069) not running in Electron/production
         }
     }
 

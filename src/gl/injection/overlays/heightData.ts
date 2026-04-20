@@ -46,12 +46,12 @@ export async function fetchHeightData(
         try {
             const path = `heightmesh-${level}/${chunkX}-${chunkZ}.bin`;
             const url = `${HEIGHT_DATA_ENDPOINT}${path}`;
-            console.log(`[HeightData] Fetching ${url}`);
+            // Silent fetch — no console spam for routine height data loading
 
             let res = await fetch(url);
             if (res.status === 403) {
                 const fallbackUrl = `${HEIGHT_DATA_FALLBACK}${path}`;
-                console.log(`[HeightData] /live/ returned 403, trying versioned fallback: ${fallbackUrl}`);
+                // Fallback silently
                 res = await fetch(fallbackUrl);
             }
             if (!res.ok) {
@@ -66,7 +66,7 @@ export async function fetchHeightData(
                 console.warn(`[HeightData] Unexpected data size for ${chunkX},${chunkZ}: got ${data.length} elements, expected ${expectedLen} (stride mismatch?)`);
             }
             heightCache.set(key, data);
-            console.log(`[HeightData] Loaded height data for chunk ${chunkX},${chunkZ} (${data.length} elements)`);
+            // Loaded successfully
             return data;
         } catch (e) {
             console.error(`[HeightData] Error fetching height data:`, e);

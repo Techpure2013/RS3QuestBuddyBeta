@@ -98,7 +98,9 @@ function generateCompassRose(
 		const zOffset = bladeIndex * 0.5;
 		bladeIndex++;
 
-		const thickness = 15;
+		// Minimal thickness — reduces depth-fighting between front/back faces.
+		// The shader handles double-sided lighting via gl_FrontFacing.
+		const thickness = 3;
 		const frontZ = centerZ + thickness + zOffset;
 		const backZ = centerZ - thickness + zOffset;
 
@@ -239,7 +241,6 @@ async function init(): Promise<boolean> {
 		if (!state.patchrs.native) {
 			return false;
 		}
-		console.log("[CompassRose] Initialized");
 		return true;
 	} catch (e) {
 		console.error("[CompassRose] Failed to init:", e);
@@ -454,11 +455,75 @@ export async function drawNpcCompassRoseAttached(
 	npcVaoId: number,
 	heightOffset: number = 1000,
 	markerId?: string,
-	framebufferId?: number
+	framebufferId?: number,
+	/** NPC location for fresh VAO lookup — if provided, captures a fresh frame
+	 *  to get the NPC's CURRENT VAO instead of using the (potentially stale) passed-in one */
+	npcLocation?: { lat: number; lng: number }
 ): Promise<GlOverlay | null> {
+	const t0 = performance.now();
 	const initialized = await init();
-	if (!initialized || !state.patchrs?.native) {
+	if (!initialized) {
+		console.warn(`[NPC] CompassRose init FAILED`);
 		return null;
+	}
+	if (!state.patchrs?.native) {
+		console.warn(`[NPC] CompassRose native not available`);
+		return null;
+	}
+
+	// If NPC location provided, do a FRESH capture to get the current VAO.
+	// Stale VAOs from shared scans are the #1 cause of "overlay created but invisible"
+	// — RS3 recycles VAO IDs between frames.
+	let actualVaoId = npcVaoId;
+	if (npcLocation) {
+		try {
+			const { getProgramMeta } = await import("@injection/render/renderprogram");
+			const recordPromise = state.patchrs.native.recordRenderCalls({
+				maxframes: 1,
+				features: ["uniforms"],
+			});
+			const timeout = new Promise<null>(r => setTimeout(() => r(null), 5000));
+			const result = await Promise.race([recordPromise, timeout]);
+			if (!result) {
+				console.warn("[NPC] Fresh VAO lookup timed out");
+				// Fall through to use passed-in VAO
+			}
+			const renders = (result as any[]) ?? [];
+
+			const TILESIZE = 512;
+			let bestDist = Infinity;
+			let bestVao = npcVaoId;
+
+			for (const render of renders) {
+				if (!render.program || !render.uniformState) continue;
+				const pm = getProgramMeta(render.program);
+				if (!pm.uBones || !pm.uModelMatrix) continue;
+				if (pm.isShadowRender || pm.isFloor || pm.isUi) continue;
+
+				const matrix = (await import("@injection/render/renderprogram")).getUniformValue(render.uniformState, pm.uModelMatrix)[0] as number[];
+				if (!matrix || matrix.length < 16) continue;
+
+				const npcX = Math.round(matrix[12] / TILESIZE) - 2;
+				const npcZ = Math.round(matrix[14] / TILESIZE) - 1;
+				const dx = npcX - npcLocation.lng;
+				const dz = npcZ - npcLocation.lat;
+				const dist = dx * dx + dz * dz;
+
+				if (dist < bestDist) {
+					bestDist = dist;
+					bestVao = render.vertexObjectId;
+				}
+			}
+
+			for (const r of renders) { try { r.dispose?.(); } catch {} }
+
+			if (bestDist <= 10 * 10) {
+				actualVaoId = bestVao;
+				console.log(`[NPC] Fresh VAO lookup: ${npcVaoId} → ${actualVaoId} (dist=${Math.sqrt(bestDist).toFixed(1)})`);
+			}
+		} catch (e) {
+			// Fall back to passed-in VAO
+		}
 	}
 
 	const id = markerId ?? "default";
@@ -528,10 +593,14 @@ export async function drawNpcCompassRoseAttached(
 	];
 
 	try {
-		// Build filter - attach to NPC's VAO and optionally filter by framebuffer
-		// Using framebufferId prevents the overlay from rendering during shadow pass
-		const filter: { vertexObjectId: number; framebufferId?: number } = { vertexObjectId: npcVaoId };
-		if (framebufferId !== undefined) {
+		// Attach to NPC's VAO — no framebuffer filter for instant visibility.
+		// The double-sided shader + alphaBlend handles shadow pass rendering.
+		// Filtering by framebuffer caused long delays (NPC doesn't always render to the same fb).
+		const filter: { vertexObjectId: number; framebufferId?: number } = {
+			vertexObjectId: actualVaoId,
+		};
+		// Only filter if explicitly provided AND non-zero (0 = default, unreliable)
+		if (framebufferId && framebufferId > 0) {
 			filter.framebufferId = framebufferId;
 		}
 
@@ -549,6 +618,7 @@ export async function drawNpcCompassRoseAttached(
 		);
 
 		state.activeMarkers.set(id, { renderOverlay: overlay, vertexArray: vertex });
+		console.log(`[NPC] CompassRose total: ${(performance.now() - t0).toFixed(0)}ms, VAO=${actualVaoId}${actualVaoId !== npcVaoId ? ` (was ${npcVaoId})` : ''}, fb=${filter.framebufferId ?? 'any'}`);
 		return overlay;
 	} catch (e) {
 		console.error("[CompassRose] Failed to create attached overlay:", e);

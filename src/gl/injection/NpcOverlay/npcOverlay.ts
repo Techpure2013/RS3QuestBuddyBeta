@@ -2062,16 +2062,18 @@ export class NpcOverlay {
     });
 
     try {
-      // Search for matching combined hash
       for (const group of groups) {
         const combined = computeCombinedHash(group.renders);
         if (combined.num === targetHashNum) {
-          // Update cache for fast future lookups
           this.updateVaoCache(bufferHash, group.mainMesh.vaoId, group.mainMesh.framebufferId);
-
           const handle = await this.draw3DArrowAboveNpc(group.mainMesh, options);
           return { handle, npc: group.mainMesh, group };
         }
+      }
+
+      if (groups.length > 0) {
+        const hashes = groups.map(g => computeCombinedHash(g.renders).hex).slice(0, 5);
+        console.log(`[NpcOverlay] No match for ${bufferHash} among ${groups.length} groups. Nearby hashes: ${hashes.join(', ')}`);
       }
 
       return { handle: null, npc: null, group: null };
@@ -2103,7 +2105,74 @@ export class NpcOverlay {
       }
     }
 
+    // Log nearest misses to help identify stale DB hashes
+    if (groups.length > 0) {
+      const hashes = groups.map(g => computeCombinedHash(g.renders).hex).slice(0, 5);
+      console.log(`[NpcOverlay] No match for ${bufferHash} among ${groups.length} groups. Nearby hashes: ${hashes.join(', ')}`);
+    }
+
     return { handle: null, npc: null, group: null };
+  }
+
+  /**
+   * Filter groups by NPC location, then hash match within that subset.
+   * Position narrows the search (only hash nearby meshes), hash identifies the exact NPC.
+   * Returns the hash-matched NPC if found, or the closest animated mesh as fallback.
+   */
+  async findNpcByLocationThenHash(
+    groups: NpcMeshGroup[],
+    targetX: number,
+    targetZ: number,
+    maxDistance: number = 5,
+    bufferHashes: string[] = [],
+  ): Promise<{ npc: NpcMesh | null; group: NpcMeshGroup | null; hashMatched: boolean }> {
+    const TILESIZE = 512;
+    const { fromHexHash, computeCombinedHash } = await import("./npcBufferHash");
+
+    const targetHashNums = bufferHashes.map(h => fromHexHash(h));
+
+    // Filter groups by proximity to NPC's known location — only hash these
+    const nearby: { group: NpcMeshGroup; dist: number }[] = [];
+
+    for (const group of groups) {
+      const mainMesh = group.mainMesh;
+      if (!mainMesh || !mainMesh.hasBones) continue;
+
+      const npcX = Math.round(mainMesh.position.x / TILESIZE) - 2;
+      const npcZ = Math.round(mainMesh.position.z / TILESIZE) - 1;
+
+      const dx = npcX - targetX;
+      const dz = npcZ - targetZ;
+      const dist = Math.sqrt(dx * dx + dz * dz);
+
+      if (dist <= maxDistance) {
+        nearby.push({ group, dist });
+      }
+    }
+
+    if (nearby.length === 0) return { npc: null, group: null, hashMatched: false };
+
+    // Hash only nearby groups — much fewer than the full scene
+    for (const { group } of nearby) {
+      try {
+        const combined = computeCombinedHash(group.renders);
+        if (targetHashNums.some(h => h === combined.num)) {
+          console.log(`[NpcOverlay] Location+Hash match at (${targetX},${targetZ}): hash=${combined.hex} from ${nearby.length} nearby groups`);
+          this.updateVaoCache(bufferHashes[0], group.mainMesh.vaoId, group.mainMesh.framebufferId);
+          return { npc: group.mainMesh, group, hashMatched: true };
+        }
+      } catch {}
+    }
+
+    // Hash didn't match any nearby group — log what we found for DB updates
+    const nearbyHashes = nearby.map(({ group }) => {
+      try { return computeCombinedHash(group.renders).hex; } catch { return "?"; }
+    });
+    console.log(`[NpcOverlay] No hash match near (${targetX},${targetZ}). ${nearby.length} nearby groups, hashes: ${nearbyHashes.join(", ")}`);
+
+    // Fallback: return closest animated mesh (position-only match)
+    nearby.sort((a, b) => a.dist - b.dist);
+    return { npc: nearby[0].group.mainMesh, group: nearby[0].group, hashMatched: false };
   }
 
   /**

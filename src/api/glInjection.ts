@@ -87,7 +87,7 @@ export async function initGlInjection(): Promise<boolean> {
 			return false;
 		}
 
-		console.log("[glInjection] Native addon detected, waiting for RS client...");
+		// Wait for RS client to be ready
 
 		// Poll getRsReady() — the launcher has already set up shared memory,
 		// but the RS client may need a moment to render its first frame.
@@ -98,7 +98,7 @@ export async function initGlInjection(): Promise<boolean> {
 		while (Date.now() - startTime < MAX_WAIT_MS) {
 			try {
 				if (patchrs.native.getRsReady()) {
-					console.log("[glInjection] RS client ready");
+					// RS client ready
 					injectionState = {
 						pid: 0,
 						dllname: "preload",

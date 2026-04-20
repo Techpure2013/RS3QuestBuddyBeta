@@ -110,7 +110,7 @@ export function useGlQuestIntegration(
 				const reader = new DialogBoxReader();
 				await reader.init();
 				dialogReaderRef.current = reader;
-				console.log("[GlQuest] DialogBoxReader initialized");
+				// DialogBoxReader ready
 
 				spriteOverlayRef.current = new SpriteOverlay();
 
@@ -119,7 +119,7 @@ export function useGlQuestIntegration(
 
 				// Listen for resolution changes to invalidate sprite overlay cache
 				resolutionCleanup = onResolutionChange((info) => {
-					console.log(`[GlQuest] Resolution changed to ${info.screenWidth}x${info.screenHeight}, invalidating sprite overlay`);
+					// Resolution changed — invalidate sprite overlay cache
 					if (spriteOverlayRef.current) {
 						// invalidateCache() now also calls stopAll() to prevent stacking
 						spriteOverlayRef.current.invalidateCache();
@@ -450,14 +450,14 @@ export function useGlQuestIntegration(
 		dialogReaderRef.current.clearCallbacks();
 		dialogReaderRef.current.onDetect(handleDialogDetection);
 		dialogReaderRef.current.start();
-		console.log("[GlQuest] Dialog stream activated (player near NPC and stationary)");
+		// Dialog stream activated
 	}, [handleDialogDetection]);
 
 	/** Stop the render stream (called when player moves away) */
 	const deactivateDialogStream = useCallback(() => {
 		if (dialogReaderRef.current?.isRunning()) {
 			dialogReaderRef.current.stop();
-			console.log("[GlQuest] Dialog stream deactivated (player moved away)");
+			// Dialog stream deactivated
 		}
 	}, []);
 
@@ -625,9 +625,18 @@ export function useGlQuestIntegration(
 		}
 	}, [dialogSolverEnabled, startDialogDetection, stopDialogDetection]);
 
+	const activatingStepRef = useRef<number>(-1);
+
 	const onStepActivated = useCallback(
 		async (step: QuestStep, stepIndex: number) => {
 			try {
+				// Skip if same step is already active or being activated
+				if (activatingStepRef.current === stepIndex) {
+					return;
+				}
+				activatingStepRef.current = stepIndex;
+
+				console.log(`[NPC] onStepActivated: step=${stepIndex}, npcs=${step.highlights?.npc?.length ?? 0}, gl=${isGlInjectionAvailable()}, compass=${compassOverlayEnabled}`);
 				currentStepIndexRef.current = stepIndex;
 				currentStepRef.current = step;
 
@@ -649,6 +658,8 @@ export function useGlQuestIntegration(
 
 	const onStepDeactivated = useCallback(async () => {
 		try {
+			console.log(`[NPC] onStepDeactivated (was step=${currentStepIndexRef.current})`);
+			activatingStepRef.current = -1;
 			await deactivateStepOverlays();
 			await stopDialogDetection();
 			currentStepIndexRef.current = -1;

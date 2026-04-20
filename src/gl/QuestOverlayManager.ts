@@ -70,6 +70,13 @@ let activationGeneration = 0;
 // Adaptive scan: fast retries when step first activates, then slows down
 let scanRetryCount = 0;
 
+// Chunk-entry pre-scan: when player enters a chunk near a pending NPC, trigger immediate scan
+// to pre-warm the VAO cache before the step even needs it.
+let lastPlayerChunkX = -1;
+let lastPlayerChunkZ = -1;
+let chunkScanInFlight = false;
+const CHUNK_SIZE_TILES = 64; // RS3 chunk = 64 tiles
+
 // Track the player's floor to clear/recreate overlays on floor change
 let lastKnownFloor = -1;
 
@@ -220,10 +227,10 @@ const COLORS = {
 	objectTile: [0, 128, 255, 200] as [number, number, number, number],
 };
 
-// Scan intervals: fast retries when player is running to NPC, then back off
-const SCAN_INTERVAL_FAST = 3000;  // First few retries — player likely approaching
-const SCAN_INTERVAL_SLOW = 15000; // After several misses — NPC probably far away
-const SCAN_FAST_RETRIES = 4;      // How many fast retries before switching to slow
+// Scan intervals: fast retries right after step activation, then proximity-gated slow scans
+const SCAN_INTERVAL_FAST = 2000;  // First few retries — NPC might not have rendered in initial frame
+const SCAN_INTERVAL_SLOW = 10000; // After fast retries — proximity-gated, only scans when player is near
+const SCAN_FAST_RETRIES = 3;      // Fast retries always scan (no proximity gate), then switches to slow
 
 // Debug flags - set to true to disable specific overlay types for testing
 const DEBUG_DISABLE_ALL_OVERLAYS = false;
@@ -367,137 +374,55 @@ function getHashesForNpc(npc: NpcHighlight): string[] {
  *
  * Optimization: Uses VAO cache for fast lookups when we've seen this NPC before
  */
-async function highlightNpcByHash(npc: NpcHighlight, preScannedGroups?: any[]): Promise<OverlayHandle | null> {
-	// Skip compass rose if not enabled
-	if (!state.compassOverlayEnabled) {
-		return null;
-	}
+async function highlightNpcByHash(
+	npc: NpcHighlight,
+	/** Pre-matched NPC data from scan — if provided, skip all scanning and use directly */
+	matchedNpc?: { vaoId: number; framebufferId: number } | null
+): Promise<OverlayHandle | null> {
+	if (!state.compassOverlayEnabled) return null;
 
 	try {
 		const hashes = getHashesForNpc(npc);
-		const hasHashes = hashes.length > 0;
-
 		const markerId = `npc-${npc.id ?? npc.npcName ?? 'unknown'}`;
 		const floor = npc.floor ?? 0;
 
-		// Hash-based paths require npcOverlay module
-		if (state.npcOverlay && hasHashes) {
-			// FAST PATH: Check VAO cache first for each hash
-			for (const hash of hashes) {
-				const cached = state.npcOverlay.getCachedVaoInfo(hash);
-				if (cached) {
-					try {
-						const compassOverlay = await drawNpcCompassRoseAttached(
-							cached.vaoId,
-							1000,
-							markerId,
-							cached.framebufferId
-						);
-
-						if (compassOverlay) {
-							state.onNpcFound?.(npc.npcName);
-							return {
-								id: compassOverlay,
-								type: "npc-arrow",
-								npcId: npc.id,
-								npcHash: hash,
-								attachmentType: "vao",
-								vaoId: cached.vaoId,
-								framebufferId: cached.framebufferId,
-								npcInfo: npc,
-								lastSeen: Date.now()
-							};
-						}
-					} catch (e) {
-						// Cache entry may be stale, will fall through to slow path
-					}
-				}
-			}
-
-			// SLOW PATH: Match against pre-scanned groups (shared recording) or do fresh scan
-			for (const hash of hashes) {
-				try {
-					let result;
-					if (preScannedGroups) {
-						// Use shared recording — no new frame capture needed
-						result = await state.npcOverlay.arrowByBufferHashFromGroups(hash, preScannedGroups);
-					} else {
-						// Fallback: individual scan (first activation, no shared recording)
-						const playerPos = getPlayerPosition();
-						const positionFilter = playerPos ? {
-							playerPosition: { x: playerPos.location.lng, z: playerPos.location.lat },
-							maxDistanceFromPlayer: 30
-						} : undefined;
-						result = await state.npcOverlay.arrowByBufferHash(hash, undefined, positionFilter);
-					}
-
-					if (result.npc) {
-						const framebufferId = result.group?.framebufferId ?? result.npc.framebufferId;
-
-						// Stop the arrow overlay if one was created (we want compass rose instead)
-						if (result.handle) {
-							try { result.handle.stop(); } catch {}
-							try { (result.handle as any).dispose?.(); } catch {}
-						}
-
-						// Attach compass rose to the NPC's VAO and framebuffer (fb filter avoids shadow pass)
-						const compassOverlay = await drawNpcCompassRoseAttached(
-							result.npc.vaoId,
-							1000, // height offset - above NPC head
-							markerId,
-							framebufferId
-						);
-
-						if (compassOverlay) {
-							state.onNpcFound?.(npc.npcName);
-							return {
-								id: compassOverlay,
-								type: "npc-arrow",
-								npcId: npc.id,
-								npcHash: hash,
-								attachmentType: "vao",
-								vaoId: result.npc.vaoId,
-								framebufferId: framebufferId,
-								npcInfo: npc,
-								lastSeen: Date.now()
-							};
-						}
-					}
-				} catch (e) {
-					// Hash scan failed, try next
-				}
-			}
-		}
-
-		// Fallback: draw at floor with framebuffer filtering
-		// This happens when: (1) no hashes available, or (2) NPC not found in view
-		// Use center of wander radius if available, otherwise use spawn location
 		let targetLat = npc.npcLocation.lat;
 		let targetLng = npc.npcLocation.lng;
-
 		if (npc.wanderRadius) {
-			// Calculate center of wander radius bounds
 			targetLat = (npc.wanderRadius.bottomLeft.lat + npc.wanderRadius.topRight.lat) / 2;
 			targetLng = (npc.wanderRadius.bottomLeft.lng + npc.wanderRadius.topRight.lng) / 2;
 		}
 
-		// Use floor-attached method with framebuffer filtering (avoids shadow pass double-render)
-		const compassOverlay = await drawNpcCompassRoseOnFloor(
-			targetLat,
-			targetLng,
-			floor,
-			markerId
+		// If we have a matched NPC from the scan, attach directly — no extra recording
+		if (matchedNpc) {
+			const compassOverlay = await drawNpcCompassRoseAttached(
+				matchedNpc.vaoId, 1000, markerId
+			);
+
+			if (compassOverlay) {
+				if (hashes[0] && state.npcOverlay) {
+					state.npcOverlay.updateVaoCache(hashes[0], matchedNpc.vaoId, matchedNpc.framebufferId);
+				}
+				state.onNpcFound?.(npc.npcName);
+				return {
+					id: compassOverlay, type: "npc-arrow", npcId: npc.id,
+					npcHash: hashes[0] || undefined, attachmentType: "vao",
+					vaoId: matchedNpc.vaoId, framebufferId: matchedNpc.framebufferId,
+					npcInfo: npc, lastSeen: Date.now()
+				};
+			}
+		}
+
+		// Floor fallback — NPC not matched or VAO attachment failed
+		const floorCompass = await drawNpcCompassRoseOnFloor(
+			targetLat, targetLng, floor, markerId
 		);
 
-		if (compassOverlay) {
+		if (floorCompass) {
 			state.onNpcFound?.(npc.npcName);
 			return {
-				id: compassOverlay,
-				type: "npc-arrow",
-				npcId: npc.id,
-				npcHash: hashes[0] || undefined,
-				attachmentType: "static",
-				npcInfo: npc
+				id: floorCompass, type: "npc-arrow", npcId: npc.id,
+				npcHash: hashes[0] || undefined, attachmentType: "static", npcInfo: npc
 			};
 		}
 
@@ -546,24 +471,27 @@ async function scanForPendingNpcs(): Promise<void> {
 		return;
 	}
 
-	// PROXIMITY GATE: Only do the expensive GPU scan if the player is within range
-	// of at least one pending NPC. No point stalling the GL pipeline when the player
-	// is on the other side of the map.
-	const SCAN_PROXIMITY_TILES = 25;
-	const playerPos = getPlayerPosition();
-	if (playerPos) {
-		const playerX = playerPos.location.lng;
-		const playerZ = playerPos.location.lat;
-		const anyNearby = state.pendingNpcs.some(npc => {
-			const npcX = npc.npcLocation?.lng ?? 0;
-			const npcZ = npc.npcLocation?.lat ?? 0;
-			const dx = playerX - npcX;
-			const dz = playerZ - npcZ;
-			return (dx * dx + dz * dz) <= SCAN_PROXIMITY_TILES * SCAN_PROXIMITY_TILES;
-		});
-		if (!anyNearby) {
-			// Player is far from all pending NPCs — skip expensive scan entirely
-			return;
+	// PROXIMITY GATE: Only applies after fast retries are exhausted.
+	// During fast retries (right after step activation), always scan — the NPC might
+	// not have rendered in the initial frame. After fast retries, gate on proximity
+	// to avoid scanning when the player is far away.
+	if (scanRetryCount >= SCAN_FAST_RETRIES) {
+		const SCAN_PROXIMITY_TILES = 25;
+		const playerPos = getPlayerPosition();
+		if (playerPos) {
+			const playerX = playerPos.location.lng;
+			const playerZ = playerPos.location.lat;
+			const anyNearby = state.pendingNpcs.some(npc => {
+				const npcX = npc.npcLocation?.lng ?? 0;
+				const npcZ = npc.npcLocation?.lat ?? 0;
+				const dx = playerX - npcX;
+				const dz = playerZ - npcZ;
+				return (dx * dx + dz * dz) <= SCAN_PROXIMITY_TILES * SCAN_PROXIMITY_TILES;
+			});
+			if (!anyNearby) {
+				// Player is far from all pending NPCs — skip expensive scan
+				return;
+			}
 		}
 	}
 
@@ -577,13 +505,10 @@ async function scanForPendingNpcs(): Promise<void> {
 	let sharedGroups: any[] | undefined;
 	if (state.npcOverlay && state.pendingNpcs.length > 0) {
 		try {
+			// No player-distance filter — findNpcByLocationThenHash filters tight
+			// per-NPC (wander radius or 5 tiles). Fewer meshes hashed.
 			sharedGroups = await state.npcOverlay.scanGrouped({
 				excludeFloor: true,
-				playerPosition: (() => {
-					const p = getPlayerPosition();
-					return p ? { x: p.location.lng, z: p.location.lat } : undefined;
-				})(),
-				maxDistanceFromPlayer: 30,
 			});
 		} catch (e) {
 			console.warn("[QuestOverlay] Shared NPC scan failed:", e);
@@ -605,8 +530,28 @@ async function scanForPendingNpcs(): Promise<void> {
 			continue;
 		}
 
-		// Pass shared groups — no new recording per NPC
-		const handle = await highlightNpcByHash(npc, sharedGroups);
+		// Match NPC from shared scan, then pass directly
+		let matched: { vaoId: number; framebufferId: number } | null = null;
+		if (sharedGroups && state.npcOverlay) {
+			const hashes = getHashesForNpc(npc);
+			let tLat = npc.npcLocation.lat, tLng = npc.npcLocation.lng;
+			if (npc.wanderRadius) {
+				tLat = (npc.wanderRadius.bottomLeft.lat + npc.wanderRadius.topRight.lat) / 2;
+				tLng = (npc.wanderRadius.bottomLeft.lng + npc.wanderRadius.topRight.lng) / 2;
+			}
+			const radius = npc.wanderRadius ? Math.max(
+				Math.abs(npc.wanderRadius.topRight.lng - npc.wanderRadius.bottomLeft.lng),
+				Math.abs(npc.wanderRadius.topRight.lat - npc.wanderRadius.bottomLeft.lat)
+			) + 5 : 10;
+			const posResult = await state.npcOverlay.findNpcByLocationThenHash(
+				sharedGroups, tLng, tLat, radius, hashes
+			);
+			if (posResult.npc) {
+				matched = { vaoId: posResult.npc.vaoId, framebufferId: posResult.npc.framebufferId };
+			}
+		}
+
+		const handle = await highlightNpcByHash(npc, matched);
 		if (handle) {
 			state.activeOverlays.push(handle);
 		} else {
@@ -749,11 +694,13 @@ async function reattachWithNewFramebuffer(overlay: OverlayHandle, newFramebuffer
 	}
 
 	// Create new overlay with updated framebuffer
+	const npcLoc = overlay.npcInfo?.npcLocation;
 	const newOverlay = await drawNpcCompassRoseAttached(
 		overlay.vaoId,
 		1000, // height offset
 		markerId,
-		newFramebufferId
+		newFramebufferId,
+		npcLoc ? { lat: npcLoc.lat, lng: npcLoc.lng } : undefined
 	);
 
 	if (newOverlay) {
@@ -842,11 +789,13 @@ async function tryReattachStaticOverlays(): Promise<void> {
 				}
 
 				// Create VAO-attached overlay
+				const npcLoc2 = overlay.npcInfo?.npcLocation;
 				const vaoOverlay = await drawNpcCompassRoseAttached(
 					cached.vaoId,
 					1000,
 					markerId,
-					cached.framebufferId
+					cached.framebufferId,
+					npcLoc2 ? { lat: npcLoc2.lat, lng: npcLoc2.lng } : undefined
 				);
 
 				if (vaoOverlay) {
@@ -867,7 +816,7 @@ async function tryReattachStaticOverlays(): Promise<void> {
 			const playerPos = getPlayerPosition();
 			const positionFilter = playerPos ? {
 				playerPosition: { x: playerPos.location.lng, z: playerPos.location.lat },
-				maxDistanceFromPlayer: 30
+				maxDistanceFromPlayer: 15
 			} : undefined;
 
 			for (const hash of hashes) {
@@ -894,11 +843,13 @@ async function tryReattachStaticOverlays(): Promise<void> {
 						}
 
 						// Create VAO-attached compass rose
+						const npcLoc4 = overlay.npcInfo?.npcLocation;
 						const vaoOverlay = await drawNpcCompassRoseAttached(
 							result.npc.vaoId,
 							1000,
 							markerId,
-							framebufferId
+							framebufferId,
+							npcLoc4 ? { lat: npcLoc4.lat, lng: npcLoc4.lng } : undefined
 						);
 
 						if (vaoOverlay) {
@@ -1027,11 +978,13 @@ async function checkPlayerProximityToStaticOverlays(): Promise<void> {
 						}
 
 						// Create VAO-attached compass rose
+						const npcLoc5 = overlay.npcInfo?.npcLocation;
 						const vaoOverlay = await drawNpcCompassRoseAttached(
 							result.npc.vaoId,
 							1000,
 							markerId,
-							framebufferId
+							framebufferId,
+							npcLoc5 ? { lat: npcLoc5.lat, lng: npcLoc5.lng } : undefined
 						);
 
 						if (vaoOverlay) {
@@ -1052,6 +1005,126 @@ async function checkPlayerProximityToStaticOverlays(): Promise<void> {
 			}
 		}
 	}
+}
+
+/**
+ * Check if player entered a chunk near a pending NPC — triggers immediate background scan
+ * to pre-warm the VAO cache. Called from position update callback (zero GPU cost to check).
+ */
+async function onPlayerPositionForChunkScan(pos: { location: { lng: number; lat: number } }): Promise<void> {
+	if (!state.isActive || state.pendingNpcs.length === 0 || chunkScanInFlight) return;
+	if (!state.npcOverlay || !state.compassOverlayEnabled) return;
+
+	const playerChunkX = Math.floor(pos.location.lng / CHUNK_SIZE_TILES);
+	const playerChunkZ = Math.floor(pos.location.lat / CHUNK_SIZE_TILES);
+
+	// Only trigger on chunk transition
+	if (playerChunkX === lastPlayerChunkX && playerChunkZ === lastPlayerChunkZ) return;
+	lastPlayerChunkX = playerChunkX;
+	lastPlayerChunkZ = playerChunkZ;
+
+	// Check if any pending NPC is in this chunk or an adjacent chunk
+	const anyInChunk = state.pendingNpcs.some(npc => {
+		const npcChunkX = Math.floor((npc.npcLocation?.lng ?? 0) / CHUNK_SIZE_TILES);
+		const npcChunkZ = Math.floor((npc.npcLocation?.lat ?? 0) / CHUNK_SIZE_TILES);
+		return Math.abs(npcChunkX - playerChunkX) <= 1 && Math.abs(npcChunkZ - playerChunkZ) <= 1;
+	});
+
+	if (!anyInChunk) return;
+
+	// Player entered a chunk near a pending NPC — pre-scan to warm VAO cache
+	console.log(`[QuestOverlay] Chunk entry scan: player at chunk (${playerChunkX},${playerChunkZ}), pending NPCs nearby`);
+	chunkScanInFlight = true;
+
+	try {
+		const sharedGroups = await state.npcOverlay.scanGrouped({
+			excludeFloor: true,
+		});
+
+		const stillPending: typeof state.pendingNpcs = [];
+
+		for (const npc of state.pendingNpcs) {
+			const existing = state.activeOverlays.find(
+				o => o.type === "npc-arrow" && ((npc.id && o.npcId === npc.id) || (npc.buffer_hash && o.npcHash === npc.buffer_hash))
+			);
+			if (existing) continue;
+
+			let matched: { vaoId: number; framebufferId: number } | null = null;
+			if (state.npcOverlay) {
+				const hashes = getHashesForNpc(npc);
+				let tLat = npc.npcLocation.lat, tLng = npc.npcLocation.lng;
+				if (npc.wanderRadius) {
+					tLat = (npc.wanderRadius.bottomLeft.lat + npc.wanderRadius.topRight.lat) / 2;
+					tLng = (npc.wanderRadius.bottomLeft.lng + npc.wanderRadius.topRight.lng) / 2;
+				}
+				const radius = npc.wanderRadius ? Math.max(
+					Math.abs(npc.wanderRadius.topRight.lng - npc.wanderRadius.bottomLeft.lng),
+					Math.abs(npc.wanderRadius.topRight.lat - npc.wanderRadius.bottomLeft.lat)
+				) + 5 : 10;
+				const posResult = await state.npcOverlay.findNpcByLocationThenHash(
+					sharedGroups, tLng, tLat, radius, hashes
+				);
+				if (posResult.npc) {
+					matched = { vaoId: posResult.npc.vaoId, framebufferId: posResult.npc.framebufferId };
+				}
+			}
+
+			const handle = await highlightNpcByHash(npc, matched);
+			if (handle) {
+				state.activeOverlays.push(handle);
+				console.log(`[NPC] Chunk scan found: ${npc.npcName}`);
+			} else {
+				stillPending.push(npc);
+			}
+		}
+
+		// Dispose shared groups
+		for (const group of sharedGroups) {
+			for (const r of (group.renders || [])) { try { (r as any).dispose?.(); } catch (_) {} }
+		}
+
+		state.pendingNpcs = stillPending;
+
+		// If all found, stop the scan interval
+		if (stillPending.length === 0 && state.pendingWanderNpcs.length === 0 && state.pendingObjects.length === 0 && state.scanInterval) {
+			clearInterval(state.scanInterval);
+			state.scanInterval = null;
+		}
+	} catch (e) {
+		console.warn("[QuestOverlay] Chunk entry scan failed:", e);
+	} finally {
+		chunkScanInFlight = false;
+	}
+}
+
+// Position tracking callback ID for chunk scanning
+let chunkScanCallbackId: string | false = false;
+
+/** Start listening for chunk-entry events via player position tracker */
+async function startChunkEntryScanning(): Promise<void> {
+	if (chunkScanCallbackId) return;
+	try {
+		const { startPlayerTracking } = await import("./PlayerPositionTracker");
+		chunkScanCallbackId = await startPlayerTracking(
+			(pos) => onPlayerPositionForChunkScan(pos),
+			1000, // Check every 1s — just reads cached position, zero GPU cost
+			"chunk-scan"
+		);
+	} catch (e) {
+		console.warn("[QuestOverlay] Failed to start chunk-entry scanning:", e);
+	}
+}
+
+/** Stop chunk-entry scanning */
+async function stopChunkEntryScanning(): Promise<void> {
+	if (!chunkScanCallbackId) return;
+	try {
+		const { stopPlayerTracking } = await import("./PlayerPositionTracker");
+		await stopPlayerTracking(true, chunkScanCallbackId as string);
+	} catch {}
+	chunkScanCallbackId = false;
+	lastPlayerChunkX = -1;
+	lastPlayerChunkZ = -1;
 }
 
 /**
@@ -1168,20 +1241,18 @@ async function clearOverlays(): Promise<void> {
 		console.warn("[QuestOverlay] Error clearing compass roses:", e);
 	}
 
-	// Clear NPC arrow overlays via .stop() then .dispose() (GlOverlay objects)
+	// Clear ALL overlay types — GlOverlay objects AND numeric TileOverlayManager IDs
 	for (const overlay of state.activeOverlays) {
-		if (overlay.type === "npc-arrow" && typeof overlay.id !== "number") {
-			try {
-				overlay.id.stop();
-			} catch (e) {
-				// Ignore errors when stopping
+		try {
+			if (typeof overlay.id === "number") {
+				// Numeric ID — these are managed by TileOverlayManager (already cleared above)
+				// Nothing extra needed here
+			} else if (overlay.id) {
+				// GlOverlay object (npc-arrow, compass rose)
+				try { overlay.id.stop(); } catch {}
+				try { (overlay.id as any).dispose?.(); } catch {}
 			}
-			try {
-				(overlay.id as any).dispose?.();
-			} catch (e) {
-				// Ignore errors when disposing
-			}
-		}
+		} catch {}
 	}
 
 	state.activeOverlays = [];
@@ -1216,24 +1287,141 @@ export async function activateStepOverlays(
 	state.onNpcFound = options?.onNpcFound;
 	state.compassOverlayEnabled = options?.compassOverlayEnabled ?? false;
 
+	// Clear stale VAO cache — after refresh/scene change, VAO IDs are reassigned.
+	// Without this, the cache fast path returns a handle on a dead VAO that never renders.
+	if (state.npcOverlay) {
+		state.npcOverlay.clearVaoCache();
+	}
+
 	const { npc: npcs, object: objects } = step.highlights;
 
-	// Process NPCs and objects in PARALLEL — under IPC proxy, sequential awaits
-	// cause "1 by 1" slowness. Parallel lets the frame cache coalesce captures
-	// and height data fetches run concurrently.
+	// ONE shared recording for ALL NPC lookups on step activation.
+	// Before: each NPC fired its own recordRenderCalls in parallel → concurrent recordings
+	// contended for the GL context, most failed, NPCs went to pending → 45s+ detection.
+	// Now: single scan, results shared across all NPCs.
+	let sharedGroups: any[] | undefined;
+	const npcHashNpcs = npcs.filter(npc => !DEBUG_DISABLE_NPC_ARROWS && npcHasHashes(npc));
+
+	console.log(`[NPC] Step has ${npcs.length} NPCs, ${npcHashNpcs.length} with hashes, compass=${state.compassOverlayEnabled}, overlay=${!!state.npcOverlay}`);
+
+	if (state.npcOverlay && state.compassOverlayEnabled && npcHashNpcs.length > 0) {
+		try {
+			sharedGroups = await state.npcOverlay.scanGrouped({
+				excludeFloor: true,
+			});
+			console.log(`[NPC] Scan captured ${sharedGroups?.length ?? 0} groups`);
+		} catch (e) {
+			console.warn("[NPC] Scan failed:", e);
+		}
+	}
+
+	for (const npc of npcHashNpcs) {
+		if (activationGeneration !== gen) break;
+		try {
+			// Match NPC by position + hash from the shared scan
+			let matchedNpc: { vaoId: number; framebufferId: number } | null = null;
+
+			if (sharedGroups && state.npcOverlay) {
+				const hashes = getHashesForNpc(npc);
+				let tLat = npc.npcLocation.lat;
+				let tLng = npc.npcLocation.lng;
+				if (npc.wanderRadius) {
+					tLat = (npc.wanderRadius.bottomLeft.lat + npc.wanderRadius.topRight.lat) / 2;
+					tLng = (npc.wanderRadius.bottomLeft.lng + npc.wanderRadius.topRight.lng) / 2;
+				}
+				const radius = npc.wanderRadius
+					? Math.max(
+						Math.abs(npc.wanderRadius.topRight.lng - npc.wanderRadius.bottomLeft.lng),
+						Math.abs(npc.wanderRadius.topRight.lat - npc.wanderRadius.bottomLeft.lat)
+					) + 5
+					: 10;
+
+				const posResult = await state.npcOverlay.findNpcByLocationThenHash(
+					sharedGroups, tLng, tLat, radius, hashes
+				);
+				if (posResult.npc) {
+					matchedNpc = { vaoId: posResult.npc.vaoId, framebufferId: posResult.npc.framebufferId };
+				}
+			}
+
+			// Pass matched NPC directly — no extra recording needed
+			const handle = await highlightNpcByHash(npc, matchedNpc);
+			if (activationGeneration !== gen) continue;
+			if (handle) {
+				state.activeOverlays.push(handle);
+				console.log(`[NPC] ✓ Found: ${npc.npcName} (${matchedNpc ? 'VAO=' + matchedNpc.vaoId : 'floor'})`);
+			} else {
+				state.pendingNpcs.push(npc);
+				console.log(`[NPC] ✗ Pending: ${npc.npcName}`);
+			}
+		} catch (e) {
+			console.warn(`[NPC] Error: ${npc.npcName}:`, e);
+		}
+	}
+
+	// Dispose shared groups
+	if (sharedGroups) {
+		for (const group of sharedGroups) {
+			for (const r of (group.renders || [])) { try { (r as any).dispose?.(); } catch (_) {} }
+		}
+	}
+
+	// Quick retry: if NPCs went to pending, wait briefly and try ONE more fresh scan.
+	// The NPC's mesh parts may differ frame-to-frame (accessories), so a second
+	// independent capture gives another chance at the right combined hash.
+	if (state.pendingNpcs.length > 0 && state.npcOverlay && state.compassOverlayEnabled && activationGeneration === gen) {
+		await new Promise(r => setTimeout(r, 500));
+
+		let retryGroups: any[] | undefined;
+		try {
+			retryGroups = await state.npcOverlay.scanGrouped({
+				excludeFloor: true,
+			});
+
+			const stillPending: NpcHighlight[] = [];
+			for (const npc of state.pendingNpcs) {
+				if (activationGeneration !== gen) break;
+				const hashes = getHashesForNpc(npc);
+				let tLat = npc.npcLocation.lat, tLng = npc.npcLocation.lng;
+				if (npc.wanderRadius) {
+					tLat = (npc.wanderRadius.bottomLeft.lat + npc.wanderRadius.topRight.lat) / 2;
+					tLng = (npc.wanderRadius.bottomLeft.lng + npc.wanderRadius.topRight.lng) / 2;
+				}
+				const radius = npc.wanderRadius ? Math.max(
+					Math.abs(npc.wanderRadius.topRight.lng - npc.wanderRadius.bottomLeft.lng),
+					Math.abs(npc.wanderRadius.topRight.lat - npc.wanderRadius.bottomLeft.lat)
+				) + 5 : 10;
+				const posResult = await state.npcOverlay.findNpcByLocationThenHash(
+					retryGroups!, tLng, tLat, radius, hashes
+				);
+				const matched = posResult.npc ? { vaoId: posResult.npc.vaoId, framebufferId: posResult.npc.framebufferId } : null;
+				const handle = await highlightNpcByHash(npc, matched);
+				if (handle) {
+					state.activeOverlays.push(handle);
+					console.log(`[NPC] Quick retry found: ${npc.npcName}`);
+				} else {
+					stillPending.push(npc);
+				}
+			}
+			state.pendingNpcs = stillPending;
+		} catch (e) {
+			console.warn("[QuestOverlay] Quick retry scan failed:", e);
+		} finally {
+			if (retryGroups) {
+				for (const group of retryGroups) {
+					for (const r of (group.renders || [])) { try { (r as any).dispose?.(); } catch (_) {} }
+				}
+			}
+		}
+	}
+
+	// Wander radius and object tiles can run in parallel (they don't use recordRenderCalls with vertexarray)
 	const tasks: Promise<void>[] = [];
 
 	for (const npc of npcs) {
-		if (!DEBUG_DISABLE_NPC_ARROWS && npcHasHashes(npc)) {
-			tasks.push(highlightNpcByHash(npc).then(handle => {
-				if (activationGeneration !== gen) return; // Superseded
-				if (handle) state.activeOverlays.push(handle);
-				else state.pendingNpcs.push(npc);
-			}).catch(e => console.warn("[QuestOverlay] NPC highlight error:", e)));
-		}
 		if (wanderRadiusEnabled && npc.wanderRadius) {
 			tasks.push(drawWanderRadiusFilled(npc).then(handle => {
-				if (activationGeneration !== gen) return; // Superseded
+				if (activationGeneration !== gen) return;
 				if (handle) state.activeOverlays.push(handle);
 				else state.pendingWanderNpcs.push(npc);
 			}).catch(e => console.warn("[QuestOverlay] Wander radius error:", e)));
@@ -1243,7 +1431,7 @@ export async function activateStepOverlays(
 	if (!DEBUG_DISABLE_OBJECT_TILES) {
 		for (const obj of objects) {
 			tasks.push(drawObjectTiles(obj).then(handles => {
-				if (activationGeneration !== gen) return; // Superseded
+				if (activationGeneration !== gen) return;
 				if (handles.length > 0) state.activeOverlays.push(...handles);
 				else state.pendingObjects.push(obj);
 			}).catch(e => console.warn("[QuestOverlay] Object tiles error:", e)));
@@ -1258,6 +1446,11 @@ export async function activateStepOverlays(
 	// Start scanning for any NPCs we couldn't find immediately
 	startNpcScanning();
 
+	// Start chunk-entry scanning — triggers immediate scan when player enters NPC's chunk
+	if (state.pendingNpcs.length > 0) {
+		startChunkEntryScanning();
+	}
+
 	// Start monitoring visibility of VAO-attached overlays
 	startVisibilityMonitoring();
 
@@ -1271,7 +1464,9 @@ export async function activateStepOverlays(
  * Deactivate all step overlays
  */
 export async function deactivateStepOverlays(): Promise<void> {
+	console.log(`[NPC] deactivateStepOverlays: ${state.activeOverlays.length} overlays, tileManager=${!!tileOverlayManager}`);
 	stopNpcScanning();
+	stopChunkEntryScanning();
 	stopVisibilityMonitoring();
 	stopProximityMonitoring();
 

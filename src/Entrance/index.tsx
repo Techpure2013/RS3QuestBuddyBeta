@@ -37,15 +37,9 @@ console.error = (...args) => {
 
 // Initialize GL injection if native addon is available
 if (isGlInjectionAvailable()) {
-	console.log("GL injection available, initializing...");
 	initGlInjection().then((success) => {
-		if (success) {
-			console.log("GL injection initialized successfully");
-			const state = getInjectionState();
-			console.log("Injection state:", state);
-		} else {
-			console.log("GL injection failed - RS client may not be running");
-			console.log("You can retry with retryGlInjection() when the client is ready");
+		if (!success) {
+			console.warn("GL injection failed - RS client may not be running");
 		}
 	});
 

@@ -696,11 +696,9 @@ export async function showCollisionOverlay(
 	// Clear existing overlays first
 	await clearCollisionOverlay();
 
-	// Import collision cache from clientPathfinder
-	const { preloadCollisionData } = await import("../api/clientPathfinder");
-
-	// Preload collision data for the region
-	await preloadCollisionData(centerX, centerY, floor, 1);
+	// TODO: Re-enable collision loading when ready
+	// const { preloadCollisionData } = await import("../api/clientPathfinder");
+	// await preloadCollisionData(centerX, centerY, floor, 1);
 
 	// Now access the collision cache to get tile data
 	// We'll import the collisionCache indirectly via a debug helper

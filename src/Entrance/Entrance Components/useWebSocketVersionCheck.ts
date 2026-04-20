@@ -142,6 +142,14 @@ export const useWebSocketVersionCheck = (
 
 		isMountedRef.current = true;
 
+		// Skip WebSocket entirely in Electron — the dev server isn't running,
+		// and the failed connection attempts spam the console with uncatchable
+		// Chromium-level net::ERR_CONNECTION_REFUSED errors.
+		const isElectron = !!(window as any).alt1gl || !!(window as any)._alt1gl || navigator.userAgent.includes("Electron");
+		if (isElectron) {
+			return;
+		}
+
 		try {
 			const meta = document.querySelector('meta[name="app-version"]');
 			clientVersionRef.current = meta?.getAttribute("content") || null;
@@ -158,18 +166,20 @@ export const useWebSocketVersionCheck = (
 			}
 
 			const isDev = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
+			const isElectron = !!(window as any).alt1gl || !!(window as any)._alt1gl || navigator.userAgent.includes("Electron");
 
 			const wsOrigin = isDev ? "http://127.0.0.1:42069" : window.location.origin;
 
 			const clientId = getOrCreateClientId();
 
+			// In Electron/launcher, the WS server may not be reachable — limit retries to stop spam
 			const socket = io(wsOrigin, {
 				path: "/socket.io/",
 				transports: ["websocket", "polling"],
 				reconnection: true,
-				reconnectionDelay: 1000,
-				reconnectionDelayMax: 5000,
-				reconnectionAttempts: Infinity,
+				reconnectionDelay: isElectron ? 5000 : 1000,
+				reconnectionDelayMax: isElectron ? 30000 : 5000,
+				reconnectionAttempts: isElectron ? 3 : Infinity,
 
 				// NEW: this is what the server uses to count unique clients
 				auth: { clientId },
@@ -182,7 +192,8 @@ export const useWebSocketVersionCheck = (
 
 				setIsConnected(true);
 				socket.emit("version:request");
-				socket.emit("collision:version:request"); // Request collision cache version
+				// TODO: Re-enable collision caching when ready
+				// socket.emit("collision:version:request");
 
 				if (fallbackTimerRef.current) {
 					clearTimeout(fallbackTimerRef.current);
@@ -272,22 +283,25 @@ export const useWebSocketVersionCheck = (
 				setOnlineUpdatedAt(ms ? new Date(ms) : new Date());
 			});
 
-			// Collision cache version updates
-			socket.on("collision:version", (data: CollisionVersionData) => {
-				if (!isMountedRef.current) return;
-				console.log(`[WebSocket] Collision cache version received: ${data.version}`);
-				setServerCollisionVersion(data.version);
-			});
+			// TODO: Re-enable collision caching when ready
+			// socket.on("collision:version", (data: CollisionVersionData) => {
+			// 	if (!isMountedRef.current) return;
+			// 	console.log(`[WebSocket] Collision cache version received: ${data.version}`);
+			// 	setServerCollisionVersion(data.version);
+			// });
+			//
+			// socket.on("collision:invalidate", (data: CollisionInvalidateData) => {
+			// 	if (!isMountedRef.current) return;
+			// 	console.log(`[WebSocket] Collision files invalidated:`, data.files);
+			// 	invalidateCollisionFiles(data.files);
+			// });
 
-			// Collision file-specific invalidation (when server saves updated files)
-			socket.on("collision:invalidate", (data: CollisionInvalidateData) => {
-				if (!isMountedRef.current) return;
-				console.log(`[WebSocket] Collision files invalidated:`, data.files);
-				invalidateCollisionFiles(data.files);
-			});
-
+			let wsErrorLogged = false;
 			socket.on("connect_error", (error: Error) => {
-				console.warn("WebSocket connection error:", error.message);
+				if (!wsErrorLogged) {
+					console.warn("[WebSocket] Connection error (suppressing further):", error.message);
+					wsErrorLogged = true;
+				}
 			});
 
 			return () => {

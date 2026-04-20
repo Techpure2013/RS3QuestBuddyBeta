@@ -335,6 +335,20 @@ export async function getCameraInfo(): Promise<CameraInfo | null> {
  * Uses streamRenderCalls to monitor renders and extract player position
  * from the tinted occlusion mesh's uModelMatrix uniform.
  */
+// GL constants for passive overlay program
+const GL_FLOAT = 0x1406;
+const GL_FLOAT_MAT4 = 0x8B5C;
+
+// Minimal shaders — passive overlay never actually renders, these just define the uniform layout
+const POSITION_TRACK_VERT = `#version 330 core
+layout (location = 0) in vec3 aPos;
+uniform highp mat4 uModelMatrix;
+void main() { gl_Position = vec4(aPos, 1.0); }`;
+
+const POSITION_TRACK_FRAG = `#version 330 core
+out vec4 FragColor;
+void main() { FragColor = vec4(0.0); }`;
+
 export class PassivePlayerTracker {
   private debug: boolean;
   private initialized = false;
@@ -343,25 +357,36 @@ export class PassivePlayerTracker {
   private currentPosition: PlayerPosition | null = null;
   private lastUpdateTime = 0;
 
+  // Passive overlay state — zero-cost position reading after initial discovery
+  private passiveOverlay: patchrs.GlOverlay | null = null;
+  private playerVaoId: number = 0;
+  private playerProgramId: number = 0;
+  private rediscoverTimer: ReturnType<typeof setInterval> | null = null;
+
   constructor(options: { debug?: boolean } = {}) {
     this.debug = options.debug ?? false;
   }
 
   /**
-   * Initialize polling-based position tracking.
-   * Uses one-shot recordRenderCalls every 3s instead of streaming,
-   * which avoids exhausting the 512MB shared memory heap.
+   * Initialize position tracking.
+   * Phase 1: ONE recordRenderCalls to find the player mesh.
+   * Phase 2: Attach passive overlay → all future reads are shared memory only (zero GPU cost).
+   * Falls back to periodic recordRenderCalls if passive overlay can't be created.
    */
   async init(): Promise<boolean> {
     if (this.initialized) return true;
 
     try {
-      // Poll every 5s — each recordRenderCalls stalls the GL pipeline for ~1 frame.
-      // The outer PlayerPositionTracker reads cached position at 100ms (instant).
-      this.pollTimer = setInterval(() => this.pollOnce(), 5000);
       this.initialized = true;
-      // Immediate first poll
-      this.pollOnce();
+
+      // Start polling fallback IMMEDIATELY — don't wait for discovery.
+      // Discovery runs async and upgrades to passive overlay when ready.
+      // This ensures position tracking works even if GL isn't ready yet.
+      this.pollTimer = setInterval(() => this.pollOnce(), 5000);
+
+      // Try initial discovery after a short delay (GL context may need time)
+      setTimeout(() => this.tryUpgradeToPassive(), 3000);
+
       return true;
     } catch (e) {
       console.error("[PassivePlayer] Init error:", e);
@@ -369,16 +394,186 @@ export class PassivePlayerTracker {
     }
   }
 
+  /** Attempt to find player and upgrade from polling to passive overlay */
+  private async tryUpgradeToPassive(): Promise<void> {
+    if (this.passiveOverlay) return; // Already upgraded
+
+    const attached = await this.discoverAndAttach();
+    if (attached) {
+      // Switch from polling to passive overlay reads
+      if (this.pollTimer) {
+        clearInterval(this.pollTimer);
+      }
+      this.pollTimer = setInterval(() => this.readFromOverlay(), 500);
+      this.rediscoverTimer = setInterval(() => this.verifyOrRediscover(), 30000);
+    } else {
+      setTimeout(() => this.tryUpgradeToPassive(), 10000);
+    }
+  }
+
+  /**
+   * Find the player mesh via ONE recordRenderCalls, then attach a passive overlay.
+   * Returns true if passive overlay is now active.
+   */
+  private async discoverAndAttach(): Promise<boolean> {
+    if (!patchrs.native) return false;
+
+    let renders: any[] = [];
+    try {
+      // Timeout: if GL server isn't responding, don't hang forever
+      const recordPromise = patchrs.native.recordRenderCalls({
+        maxframes: 1,
+        features: ["uniforms"],
+      });
+      const timeoutPromise = new Promise<null>((resolve) => setTimeout(() => resolve(null), 5000));
+      const result = await Promise.race([recordPromise, timeoutPromise]);
+      if (result === null) return false;
+      renders = result as any[];
+
+      // Find the player mesh
+      const tracker = new PlayerPositionTracker();
+      const pos = tracker.findPlayer(renders);
+      if (!pos) return false;
+
+      this.playerVaoId = pos.vaoId;
+      this.playerProgramId = pos.programId;
+      this.currentPosition = pos;
+      this.lastUpdateTime = Date.now();
+
+      // Create a minimal program just to define the uModelMatrix uniform layout
+      let program;
+      try {
+        program = patchrs.native.createProgram(
+          POSITION_TRACK_VERT,
+          POSITION_TRACK_FRAG,
+          [{ location: 0, name: "aPos", type: GL_FLOAT, length: 3 }],
+          [{ name: "uModelMatrix", type: GL_FLOAT_MAT4, length: 1, snapshotOffset: 0, snapshotSize: 64 }]
+        );
+      } catch (e) {
+        return false;
+      }
+
+      // Attach passive overlay — fires every frame the player mesh renders,
+      // copies uModelMatrix into the uniform buffer (shared memory).
+      // Zero GPU cost: no extra draw calls, no pipeline stalls.
+      try {
+        this.passiveOverlay = patchrs.native.beginOverlay(
+          { vertexObjectId: this.playerVaoId },
+          program,
+          undefined,
+          {
+            trigger: 'passive',
+            uniformSources: [
+              { name: "uModelMatrix", sourceName: "uModelMatrix", type: "program" as const },
+            ],
+            uniformBuffer: new Uint8Array(64),
+          }
+        );
+      } catch (e) {
+        return false;
+      }
+
+      return !!this.passiveOverlay;
+    } catch (e) {
+      return false;
+    } finally {
+      for (const r of renders) {
+        try { r.dispose?.(); } catch (_) {}
+      }
+    }
+  }
+
+  /**
+   * Read position from passive overlay uniform state — instant shared memory read.
+   * No recordRenderCalls, no GPU stall.
+   */
+  private readFromOverlay(): void {
+    if (!this.passiveOverlay) return;
+
+    try {
+      const uniformState = this.passiveOverlay.getUniformState();
+      if (!uniformState || uniformState.length < 64) return;
+
+      // Read model matrix translation: X=offset 48, Y=offset 52, Z=offset 56
+      const view = new DataView(uniformState.buffer, uniformState.byteOffset);
+      const rawX = view.getFloat32(48, true);
+      const rawY = view.getFloat32(52, true);
+      const rawZ = view.getFloat32(56, true);
+
+      if (rawX === 0 && rawZ === 0) return;
+
+      const x = Math.round(rawX / TILESIZE) - 2;
+      const y = rawY / TILESIZE;
+      const z = Math.round(rawZ / TILESIZE) - 1;
+
+      // Read rotation from matrix columns [0] and [8]
+      const m0 = view.getFloat32(0, true);
+      const m8 = view.getFloat32(32, true);
+
+      this.currentPosition = {
+        x, y, z,
+        rotation: Math.atan2(-m8, m0),
+        vaoId: this.playerVaoId,
+        programId: this.playerProgramId,
+      };
+      this.lastUpdateTime = Date.now();
+    } catch (e) {
+      if (this.debug) console.error("[PassivePlayer] Overlay read error:", e);
+    }
+  }
+
+  /**
+   * Verify the passive overlay is still getting updates.
+   * If position is stale (>10s), the VAO might have changed — rediscover.
+   */
+  private async verifyOrRediscover(): Promise<void> {
+    if (!this.passiveOverlay) return;
+
+    const staleMs = Date.now() - this.lastUpdateTime;
+    if (staleMs < 10000) return; // Still fresh
+
+    // Stop old overlay
+    try { this.passiveOverlay.stop(); } catch {}
+    this.passiveOverlay = null;
+
+    // Try to rediscover
+    const attached = await this.discoverAndAttach();
+    if (!attached) {
+      // Switch to polling fallback
+      if (this.pollTimer) clearInterval(this.pollTimer);
+      this.pollTimer = setInterval(() => this.pollOnce(), 5000);
+    }
+  }
+
+  /** Fallback: poll with recordRenderCalls (expensive) */
   private async pollOnce(): Promise<void> {
     if (this.pollInFlight || !patchrs.native) return;
     this.pollInFlight = true;
     let renders: any[] = [];
     try {
-      renders = await patchrs.native.recordRenderCalls({
+      const recordPromise = patchrs.native.recordRenderCalls({
         maxframes: 1,
         features: ["uniforms"],
       });
+      const timeout = new Promise<null>((resolve) => setTimeout(() => resolve(null), 5000));
+      const result = await Promise.race([recordPromise, timeout]);
+      if (result === null) return; // GL not ready, skip this poll
+      renders = result as any[];
       this.processRenders(renders);
+
+      // Try to upgrade to passive overlay if we found the player
+      if (this.currentPosition && !this.passiveOverlay) {
+        this.playerVaoId = this.currentPosition.vaoId;
+        this.playerProgramId = this.currentPosition.programId;
+        const attached = await this.discoverAndAttach();
+        if (attached) {
+          if (this.pollTimer) clearInterval(this.pollTimer);
+          this.pollTimer = setInterval(() => this.readFromOverlay(), 500);
+          if (!this.rediscoverTimer) {
+            this.rediscoverTimer = setInterval(() => this.verifyOrRediscover(), 30000);
+          }
+        }
+      }
     } catch (e) {
       if (this.debug) console.error("[PassivePlayer] Poll error:", e);
     } finally {
@@ -464,8 +659,10 @@ export class PassivePlayerTracker {
    * Get current player position (instant read from cached value)
    */
   getPosition(): PlayerPosition | null {
-    // Return cached position if recent (within 5s — stream fires every ~2s)
-    if (this.currentPosition && Date.now() - this.lastUpdateTime < 5000) {
+    // Return cached position if recent.
+    // Passive overlay mode updates at 500ms, fallback polling at 5s.
+    // Use 10s staleness window to cover rediscovery gaps.
+    if (this.currentPosition && Date.now() - this.lastUpdateTime < 10000) {
       return this.currentPosition;
     }
     return null;
@@ -494,6 +691,16 @@ export class PassivePlayerTracker {
       clearInterval(this.pollTimer);
       this.pollTimer = null;
     }
+    if (this.rediscoverTimer) {
+      clearInterval(this.rediscoverTimer);
+      this.rediscoverTimer = null;
+    }
+    if (this.passiveOverlay) {
+      try { this.passiveOverlay.stop(); } catch {}
+      this.passiveOverlay = null;
+    }
+    this.playerVaoId = 0;
+    this.playerProgramId = 0;
     this.currentPosition = null;
     this.initialized = false;
   }
